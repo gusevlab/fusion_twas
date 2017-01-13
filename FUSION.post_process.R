@@ -412,8 +412,10 @@ for ( i in 1:length(cons.loc.starts) ) {
 		cur.glist = cur.glist[ ord , ]
 		clr.fg = clr.fg[ ord ]
 		clr.bg = clr.bg[ ord ]
-		clr.leg = clr.leg[ ord ]
-		clr.num = clr.num[ ord ]
+		if ( !is.na( opt$plot_legend) ) {
+			clr.leg = clr.leg[ ord ]
+			clr.num = clr.num[ ord ]
+		}
 		
 		cur.gstart = apply(cur.glist[,2:3],1,min)/1e6
 		cur.gend = apply(cur.glist[,2:3],1,max)/1e6
