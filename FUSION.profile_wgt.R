@@ -35,7 +35,7 @@ options(digits=3)
 cat( "Average hsq:" , mean(mat.hsq[,1]) , '(' , sd(mat.hsq[,1])/sqrt(N) , ') \n' , file=stderr() )
 
 cat( "\nAverage crossvalidation R2:\n" , file=stderr() )
-write.table( cbind( format(apply(mat.mod.rsq,2,mean),digits=3) , format(apply(mat.mod.rsq,2,sd) / sqrt(N),digits=3) ) , quote=F , col.names=c("R2","SE") , row.names=models , sep='\t' , file=stderr() )
+write.table( cbind( format(apply(mat.mod.rsq,2,mean,na.rm=T),digits=3) , format(apply(mat.mod.rsq,2,sd,na.rm=T) / sqrt(N),digits=3) ) , quote=F , col.names=c("R2","SE") , row.names=models , sep='\t' , file=stderr() )
 cat( "BEST" , format(mean(best),digits=3) , '\n' , sep='\t' , file=stderr() )
 
 cat( "\n% Model is best:\n" , file=stderr() )

@@ -12,7 +12,7 @@ option_list = list(
               help="Path to temporary files [required]"),
   make_option("--pheno", action="store", default=NA, type='character',
               help="Path to molecular phenotype file (PLINK format) [optional, taken from bfile otherwise]"),
-  make_option("--PATH_plink", action="store", default="plink --allow-no-sex", type='character',
+  make_option("--PATH_plink", action="store", default="plink", type='character',
               help="Path to plink executable [%default]"),
   make_option("--PATH_gcta", action="store", default="gcta_nr_robust", type='character',
               help="Path to plink executable [%default]"),
@@ -22,6 +22,8 @@ option_list = list(
               help="Path to quantitative covariates (PLINK format) [optional]"),
   make_option("--hsq_p", action="store", default=0.01, type='double',
               help="Minimum heritability p-value for which to compute weights [default: %default]"),
+  make_option("--hsq_set", action="store", default=NA, type='double',
+              help="Skip heritability estimation and set hsq estimate to this value [optional]"),
   make_option("--crossval", action="store", default=5, type='double',
               help="How many folds of cross-validation, 0 to skip [default: %default]"),
   make_option("--verbose", action="store", default=1, type="integer",
@@ -70,7 +72,7 @@ weights.bslmm = function( input , bv_type , snp , out=NA ) {
 weights.lasso = function( input , hsq , snp , out=NA ) {
 	if ( is.na(out) ) out = paste(input,".LASSO",sep='')
 
-	arg = paste( opt$PATH_plink , " --bfile " , input , " --lasso " , hsq , " --out " , out , sep='' )
+	arg = paste( opt$PATH_plink , " --allow-no-sex --bfile " , input , " --lasso " , hsq , " --out " , out , sep='' )
 	system( arg , ignore.stdout=SYS_PRINT,ignore.stderr=SYS_PRINT )
 	if ( !file.exists(paste(out,".lasso",sep='')) ) {
 	cat( paste(out,".lasso",sep='') , " LASSO output did not exist\n" )
@@ -122,6 +124,24 @@ for ( f in files ) {
 		q()
 	}
 }
+
+if ( system( paste(opt$PATH_plink,"--help") , ignore.stdout=T,ignore.stderr=T ) != 0 ) {
+	cat( "ERROR: plink could not be executed, set with --PATH_plink\n" , sep='', file=stderr() )
+	cleanup()
+	q()
+}
+
+if ( !is.na(opt$hsq_set) && system( opt$PATH_gcta , ignore.stdout=T,ignore.stderr=T ) != 0 ){
+	cat( "ERROR: gcta could not be executed, set with --PATH_gcta\n" , sep='', file=stderr() )
+	cleanup()
+	q()
+}
+
+if ( sum(models=="bslmm") != 0 && system( paste(opt$PATH_gemma,"--help") , ignore.stdout=T,ignore.stderr=T ) != 0 ){
+	cat( "ERROR: gemma could not be executed, set with --PATH_gemma or remove 'bslmm' from models\n" , sep='', file=stderr() )
+	cleanup()
+	q()
+}
 # ---
 
 fam = read.table(paste(opt$bfile,".fam",sep=''),as.is=T)
@@ -162,14 +182,15 @@ if ( !is.na(opt$covar) ) {
 
 geno.file = opt$tmp
 # recode to the intersection of samples and new phenotype
-arg = paste( opt$PATH_plink ," --bfile ",opt$bfile," --pheno ",pheno.file," --keep ",pheno.file," --make-bed --out ",geno.file,sep='')
+arg = paste( opt$PATH_plink ," --allow-no-sex --bfile ",opt$bfile," --pheno ",pheno.file," --keep ",pheno.file," --make-bed --out ",geno.file,sep='')
 system(arg , ignore.stdout=SYS_PRINT,ignore.stderr=SYS_PRINT)
 
+# --- HERITABILITY ANALYSIS
+if ( is.na(opt$hsq_set) ) {
 if ( opt$verbose >= 1 ) cat("### Estimating heritability\n")
 
-# --- HERITABILITY ANALYSIS
 # 1. generate GRM
-arg = paste( opt$PATH_plink," --bfile ",opt$tmp," --make-grm-bin --out ",opt$tmp,sep='')
+arg = paste( opt$PATH_plink," --allow-no-sex --bfile ",opt$tmp," --make-grm-bin --out ",opt$tmp,sep='')
 system(arg , ignore.stdout=SYS_PRINT,ignore.stderr=SYS_PRINT)
 
 # 2. estimate heritability
@@ -195,6 +216,12 @@ if ( hsq[1] < 0 || hsq.pv > opt$hsq_p ) {
 	cat(opt$tmp," : heritability ",hsq[1],"; LRT P-value ",hsq.pv," : skipping gene\n",sep='',file=stderr())
 	cleanup()
 	q()
+}
+
+} else {
+if ( opt$verbose >= 1 ) cat("### Skipping heritability estimate\n")
+hsq = opt$hsq_set
+hsq.pv = NA
 }
 
 # read in genotypes
@@ -235,7 +262,7 @@ for ( i in 1:opt$crossval ) {
 	# hide current fold
 	cv.file = paste(opt$tmp,".cv",sep='')
 	write.table( cv.train , quote=F , row.names=F , col.names=F , file=paste(cv.file,".keep",sep=''))	
-	arg = paste( opt$PATH_plink ," --bfile ",opt$tmp," --keep ",cv.file,".keep --out ",cv.file," --make-bed",sep='')
+	arg = paste( opt$PATH_plink ," --allow-no-sex --bfile ",opt$tmp," --keep ",cv.file,".keep --out ",cv.file," --make-bed",sep='')
 	system(arg , ignore.stdout=SYS_PRINT,ignore.stderr=SYS_PRINT)
 
 	for ( mod in 1:M ) {
@@ -249,10 +276,10 @@ for ( i in 1:opt$crossval ) {
 			pred.wgt = weights.lasso( cv.file , hsq[1] , snp=genos$bim[,2] )
 		}
 		else if ( models[mod] == "enet" ) {
-			pred.wgt = weights.enet( genos$bed[ cv.sample[ -indx ],] , cv.train[,3] , alpha=0.5 )
+			pred.wgt = weights.enet( genos$bed[ cv.sample[ -indx ],] , as.matrix(cv.train[,3]) , alpha=0.5 )
 		}		
 		else if ( models[mod] == "top1" ) {
-			pred.wgt = weights.marginal( genos$bed[ cv.sample[ -indx ],] , cv.train[,3,drop=F] , beta=T )
+			pred.wgt = weights.marginal( genos$bed[ cv.sample[ -indx ],] , as.matrix(cv.train[,3,drop=F]) , beta=T )
 			pred.wgt[ - which.max( pred.wgt^2 ) ] = 0
 		}
 
@@ -289,10 +316,10 @@ for ( mod in 1:M ) {
 		wgt.matrix[,mod] = weights.lasso( geno.file , hsq[1] , snp=genos$bim[,2] , out=opt$tmp )
 	}
 	else if ( models[mod] == "enet" ) {
-		wgt.matrix[,mod] = weights.enet( genos$bed , pheno[,3] , alpha=0.5 )
+		wgt.matrix[,mod] = weights.enet( genos$bed , as.matrix(pheno[,3]) , alpha=0.5 )
 	}	
 	else if ( models[mod] == "top1" ) {
-		wgt.matrix[,mod] = weights.marginal( genos$bed , pheno[,3,drop=F] , beta=F )
+		wgt.matrix[,mod] = weights.marginal( genos$bed , as.matrix(pheno[,3]) , beta=F )
 	}
 }
 
