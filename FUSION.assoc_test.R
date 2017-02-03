@@ -134,24 +134,25 @@ for ( w in 1:nrow(wgtlist) ) {
 
 	# Compute LD matrix
 	if ( length(cur.Z) == 0 ) {
-	cat( "WARNING : " , unlist(wgtlist[w,]) , " had no overlapping SNPs\n")
-	cur.FAIL = TRUE
+		cat( "WARNING : " , unlist(wgtlist[w,]) , " had no overlapping SNPs\n")
+		cur.FAIL = TRUE
+		out.tbl$NSNP[w] = NA
 	} else {
-	cur.LD = t(cur.genos) %*% cur.genos / (nrow(cur.genos)-1)
-	
-	cur.miss = is.na(cur.Z)
-	# Impute missing Z-scores
-	if ( sum(cur.miss) != 0 ) {
-	if ( sum(!cur.miss) == 0 ) {
-	cat( "WARNING : " , unlist(wgtlist[w,]) , " had no overlapping GWAS Z-scores\n")
-	cur.FAIL = TRUE
-	} else {
-	cur.wgt =  cur.LD[cur.miss,!cur.miss] %*% solve( cur.LD[!cur.miss,!cur.miss] + 0.1 * diag(sum(!cur.miss)) )
-	cur.impz = cur.wgt %*% cur.Z[!cur.miss]
-	cur.r2pred = diag( cur.wgt %*% cur.LD[!cur.miss,!cur.miss] %*% t(cur.wgt) )
-	cur.Z[cur.miss] = cur.impz / sqrt(cur.r2pred)
-	}
-	}
+		cur.LD = t(cur.genos) %*% cur.genos / (nrow(cur.genos)-1)	
+		out.tbl$NSNP[w] = nrow(cur.LD)
+		cur.miss = is.na(cur.Z)
+		# Impute missing Z-scores
+		if ( sum(cur.miss) != 0 ) {
+		if ( sum(!cur.miss) == 0 ) {
+		cat( "WARNING : " , unlist(wgtlist[w,]) , " had no overlapping GWAS Z-scores\n")
+		cur.FAIL = TRUE
+		} else {
+		cur.wgt =  cur.LD[cur.miss,!cur.miss] %*% solve( cur.LD[!cur.miss,!cur.miss] + 0.1 * diag(sum(!cur.miss)) )
+		cur.impz = cur.wgt %*% cur.Z[!cur.miss]
+		cur.r2pred = diag( cur.wgt %*% cur.LD[!cur.miss,!cur.miss] %*% t(cur.wgt) )
+		cur.Z[cur.miss] = cur.impz / sqrt(cur.r2pred)
+		}
+		}
 
 	if ( !cur.FAIL ) {
 		# Compute TWAS Z-score
@@ -265,17 +266,14 @@ for ( w in 1:nrow(wgtlist) ) {
 	out.tbl$CHR[w] = wgtlist$CHR[w]
 	out.tbl$P0[w] = wgtlist$P0[w]
 	out.tbl$P1[w] = wgtlist$P1[w]
-	
 	out.tbl$ID[w] = wgtlist$ID[w]
 	out.tbl$HSQ[w] = hsq[1]
-
-	out.tbl$NSNP[w] = nrow(cur.LD)
 	out.tbl$MODEL[w] = colnames( cv.performance )[ mod.best ]
 	out.tbl$MODELCV.R2[w] = cv.performance[1,mod.best]
 	out.tbl$MODELCV.PV[w] = cv.performance[2,mod.best]
 
 	eqtlmod = colnames(wgt.matrix) == "top1"
-	if ( length(eqtlmod) == 0 ) {
+	if ( cur.FAIL || length(eqtlmod) == 0 ) {
 		out.tbl$EQTL.ID[w] = NA
 		out.tbl$EQTL.R2[w] = NA
 		out.tbl$EQTL.Z[w] =  NA
@@ -289,7 +287,7 @@ for ( w in 1:nrow(wgtlist) ) {
 	}
 	
 	topgwas = which.max( cur.Z^2 )
-	if ( length(topgwas) != 0 && !is.na(topgwas) ) {
+	if ( !cur.FAIL && length(topgwas) != 0 && !is.na(topgwas) ) {
 		out.tbl$BEST.GWAS.ID[w] = rownames(wgt.matrix)[ topgwas ]
 		out.tbl$BEST.GWAS.Z[w] = cur.Z[ topgwas ]
 	} else {
