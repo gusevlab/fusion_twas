@@ -12,14 +12,12 @@ option_list = list(
               help="Path to directory where weight files (WGT column) are stored [required]"),
   make_option("--ref_ld_chr", action="store", default=NA, type='character',
               help="Prefix to reference LD files in binary PLINK format by chromosome [required]"),
+  make_option("--force_model", action="store", default=NA, type='character',
+              help="Force specific predictive model to be used, no flag (default) means select most significant cross-val. Options: blup,lasso,top1,enet"),              
   make_option("--perm", action="store", default=0, type='integer',
               help="Maximum number of permutations to perform for each feature test [default: 0/off]"),
   make_option("--perm_minp", action="store", default=0.05, type='double',
-              help="Minimum p-value for which to initiate permutation test, if --perm flag present [default: %default]"),
-  make_option("--indep_weights", action="store_true", default=FALSE,
-              help="Attempt to identify features with independently significant weights [EXPERIMENTAL]."),
-  make_option("--cond_weights", action="store_true", default=FALSE,
-              help="Attempt to identify features with independently significant weights [EXPERIMENTAL]."),       		  
+              help="Minimum p-value for which to initiate permutation test, if --perm flag present [default: %default]"),    		  
   make_option("--chr", action="store", default=NA, type='character',
               help="Chromosome to analyze, currently only single chromosome analyses are performed [required]")					  
 )
@@ -125,11 +123,24 @@ for ( w in 1:nrow(wgtlist) ) {
 	cur.Z = sumstat$Z[m]
 
 	# Identify the best model
-	mod.best = (which.max(cv.performance[1,]))
-	if ( names(mod.best) == "top1" ) {
-		# cat( "WARNING: top eQTL is the best predictor for this gene, continuing with 2nd-best model\n" )
-		mod.best = names( which.max(cv.performance[1,colnames(cv.performance)!="top1"]) )
-		mod.best = which( colnames(cv.performance) == mod.best )
+	if ( !is.na(opt$force_model) ) {
+		mod.best = which( colnames(wgt.matrix) == opt$force_model )
+		if ( length(mod.best) == 0 ) {
+			cat( "WARNING : --force_model" , mod.best ,"does not exist for", unlist(wgtlist[w,]) , "\n")
+			cur.FAIL = TRUE
+		}	
+	} else {
+		mod.best = (which.max(cv.performance[1,]))
+		if ( names(mod.best) == "top1" ) {
+			# cat( "WARNING: top eQTL is the best predictor for this gene, continuing with 2nd-best model\n" )
+			mod.best = names( which.max(cv.performance[1,colnames(cv.performance)!="top1"]) )
+			mod.best = which( colnames(cv.performance) == mod.best )
+		}
+	}
+	
+	if ( sum(wgt.matrix) == 0 ) {
+		cat( "WARNING : " , unlist(wgtlist[w,]) , "had", length(cur.Z) , "overlapping SNPs, but non with non-zero expression weights, try more SNPS or a different model\n")
+		cur.FAIL = TRUE
 	}
 
 	# Compute LD matrix
@@ -143,85 +154,21 @@ for ( w in 1:nrow(wgtlist) ) {
 		cur.miss = is.na(cur.Z)
 		# Impute missing Z-scores
 		if ( sum(cur.miss) != 0 ) {
-		if ( sum(!cur.miss) == 0 ) {
-		cat( "WARNING : " , unlist(wgtlist[w,]) , " had no overlapping GWAS Z-scores\n")
-		cur.FAIL = TRUE
-		} else {
-		cur.wgt =  cur.LD[cur.miss,!cur.miss] %*% solve( cur.LD[!cur.miss,!cur.miss] + 0.1 * diag(sum(!cur.miss)) )
-		cur.impz = cur.wgt %*% cur.Z[!cur.miss]
-		cur.r2pred = diag( cur.wgt %*% cur.LD[!cur.miss,!cur.miss] %*% t(cur.wgt) )
-		cur.Z[cur.miss] = cur.impz / sqrt(cur.r2pred)
-		}
+			if ( sum(!cur.miss) == 0 ) {
+				cat( "WARNING : " , unlist(wgtlist[w,]) , " had no overlapping GWAS Z-scores\n")
+				cur.FAIL = TRUE
+			} else {
+				cur.wgt =  cur.LD[cur.miss,!cur.miss] %*% solve( cur.LD[!cur.miss,!cur.miss] + 0.1 * diag(sum(!cur.miss)) )
+				cur.impz = cur.wgt %*% cur.Z[!cur.miss]
+				cur.r2pred = diag( cur.wgt %*% cur.LD[!cur.miss,!cur.miss] %*% t(cur.wgt) )
+				cur.Z[cur.miss] = cur.impz / sqrt(cur.r2pred)
+			}
 		}
 
 	if ( !cur.FAIL ) {
 		# Compute TWAS Z-score
 		cur.twasz = wgt.matrix[,mod.best] %*% cur.Z
 		cur.twasr2pred = wgt.matrix[,mod.best] %*% cur.LD %*% wgt.matrix[,mod.best]
-		
-		if ( opt$indep_weights ) {
-			# the lasso (sparsest) model is always used
-			mod.lasso = which(colnames(wgt.matrix) == "lasso")
-			mod.assoc = which(colnames(wgt.matrix) == "top1")
-			# do informed LD-pruning
-			keep = wgt.matrix[,mod.lasso] != 0
-			cur.ld = t(cur.genos[,keep]) %*% cur.genos[,keep] / (nrow(cur.genos)-1)
-			pruned = rep(F,ncol(cur.ld))
-			# walk down the p-value list
-			for ( i in order(wgt.matrix[keep,mod.assoc]^2,decreasing=T) ) {
-				if ( !pruned[i] ) {
-					# remove anything in LD
-					pruned[ cur.ld[ i , ]^2 > 0.1 ] = T
-					pruned[i] = F
-				}
-			}
-			if ( sum(!pruned) > 2 ) {
-				pruned = which( keep )[ !pruned ]			
-				# compute indep TWAS Z-stat
-				indep.twasz = wgt.matrix[pruned,mod.lasso] %*% cur.Z[pruned,drop=F]
-				indep.twasr2pred = wgt.matrix[pruned,mod.lasso] %*% cur.LD[pruned,pruned] %*% wgt.matrix[pruned,mod.lasso]
-				# compute SMR test here
-				smrstat = (wgt.matrix[pruned,mod.assoc]^2 * cur.Z[pruned,drop=F]^2) / (wgt.matrix[pruned,mod.assoc]^2 + cur.Z[pruned,drop=F]^2)
-				cat( wgt.file, paste(format(smrstat,digits=3),sep=',',collapse=',') , paste(format(wgt.matrix[pruned,mod.assoc],digits=3),sep=',',collapse=',') , paste(format(cur.Z[pruned,drop=F],digits=3),sep=',',collapse=',') , cor( wgt.matrix[pruned,mod.assoc]  , cur.Z[pruned,drop=F] ) , cur.twasz/sqrt(cur.twasr2pred) , indep.twasz/sqrt(indep.twasr2pred) , '\n' )
-			}
-		} else if ( opt$cond_weights ) {
-			mod.assoc = which(colnames(wgt.matrix) == "top1")
-			# do conditional analysis to get independent effects
-			marg.z = wgt.matrix[,mod.assoc]
-			cond.z = wgt.matrix[,mod.assoc]
-			cond.z.save = rep(0,length(cond.z))
-			wgt.keep = rep(F,length(cond.z))
-			zthresh = qnorm( 0.05 / length(cond.z) / 2,lower.tail=F)
-			
-			while ( sum(cond.z^2 > zthresh^2) != 0 ) {
-				# add most conditionally significant feature 
-				wgt.keep[ which.max(cond.z^2) ] = T
-				cond.z.save[ which.max(cond.z^2) ] = cond.z[ which.max(cond.z^2) ]
-				cur.dinv = solve(cur.LD[wgt.keep,wgt.keep])
-				prev.max = max(cond.z^2)
-				for ( i in 1:length(cond.z) ) {
-					if ( wgt.keep[i] ) {
-						cond.z[i] = 0
-					} else if ( max(cur.LD[i,wgt.keep]^2) > 0.5 ) {
-						cond.z[i] = 0
-					} else {
-						# estimate conditional effect size
-						cur.b = marg.z[i] - cur.LD[i,wgt.keep,drop=F] %*% (cur.dinv %*% marg.z[wgt.keep,drop=F])
-						cur.b.var = ( 1 - cur.LD[i,wgt.keep,drop=F] %*% ( cur.dinv ) %*% t(cur.LD[i,wgt.keep,drop=F]) )
-						if ( cur.b.var < 0 ) cond.z[i] = 0
-						else cond.z[i] = cur.b / sqrt( cur.b.var )
-					}
-				}
-				
-				# TODO: Better quantifying + reporting of overfit here.
-				if ( max(cond.z^2) > prev.max ) break()
-			}
-			
-			if ( sum(wgt.keep) > 2 ) {
-				tst = cor.test( marg.z[ wgt.keep ] , cur.Z[ wgt.keep ] )
-				cat( wgt.file , sum(wgt.keep) , paste( round(marg.z[wgt.keep],1) , collapse=',' ) , paste( round(cur.Z[wgt.keep],1) , collapse=',' ) , tst$p.value , '\n' )
-			}
-		}		
 				
 		if ( cur.twasr2pred > 0 ) {
 			cur.twas = cur.twasz / sqrt(cur.twasr2pred)
@@ -257,6 +204,7 @@ for ( w in 1:nrow(wgtlist) ) {
 			}
 		} else {
 			cur.FAIL=T
+			cat( "WARNING : " , unlist(wgtlist[w,]) , " had zero predictive accuracy, try a different model.\n")
 		}
 	}
 	}
@@ -309,6 +257,6 @@ out.tbl$TWAS.P = 2*(pnorm( abs(out.tbl$TWAS.Z) , lower.tail=F))
 # WRITE MHC TO SEPARATE FILE
 mhc = out.tbl$CHR == 6 & out.tbl$P0 > 26e6 & out.tbl$P1 < 34e6
 if ( sum( mhc ) > 0 ) {
-	write.table( format( out.tbl[mhc,] , digigs=3 ) , quote=F , row.names=F , sep='\t' , file=paste(opt$out,".MHC",sep='') )
+	write.table( format( out.tbl[mhc,] , digits=3 ) , quote=F , row.names=F , sep='\t' , file=paste(opt$out,".MHC",sep='') )
 }
 write.table( format( out.tbl[!mhc,] , digits=3 ) , quote=F , row.names=F , sep='\t' , file=opt$out )
