@@ -1,0 +1,10 @@
+# Site settings
+title: TWAS / FUSION
+tag_text: TWAS / FUSION
+description: Functional Summary-based Imputation
+
+# Build settings
+markdown: kramdown
+exclude: ["README.md"]
+sass:
+  style: compressed
