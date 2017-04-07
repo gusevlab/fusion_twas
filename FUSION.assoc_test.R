@@ -13,7 +13,9 @@ option_list = list(
   make_option("--ref_ld_chr", action="store", default=NA, type='character',
               help="Prefix to reference LD files in binary PLINK format by chromosome [required]"),
   make_option("--force_model", action="store", default=NA, type='character',
-              help="Force specific predictive model to be used, no flag (default) means select most significant cross-val. Options: blup,lasso,top1,enet"),              
+              help="Force specific predictive model to be used, no flag (default) means select most significant cross-val. Options: blup,lasso,top1,enet"),
+  make_option("--caviar", action="store_true", default=FALSE,
+              help="Generate eCAVIAR-format (Z,LD) files for fine-mapping [default off]"),				  
   make_option("--perm", action="store", default=0, type='integer',
               help="Maximum number of permutations to perform for each feature test [default: 0/off]"),
   make_option("--perm_minp", action="store", default=0.05, type='double',
@@ -93,7 +95,7 @@ if ( sum(!qc$keep) > 0 ) {
 	sumstat = sumstat[qc$keep,]
 }
 
-# WARNING if too many NAs in summary stats
+# TODO: WARNING if too many NAs in summary stats
 
 ## For each wgt file:
 for ( w in 1:nrow(wgtlist) ) {
@@ -232,6 +234,16 @@ for ( w in 1:nrow(wgtlist) ) {
 		out.tbl$EQTL.R2[w] = cv.performance[1,eqtlmod]
 		out.tbl$EQTL.Z[w] = wgt.matrix[ topeqtl , eqtlmod ]
 		out.tbl$EQTL.GWAS.Z[w] = cur.Z[ topeqtl ]
+		
+		# write CAVIAR inputs
+		if( !is.na(opt$caviar) ) {
+			cur.Z = as.matrix(cur.Z,ncol=1)
+			rownames(cur.Z) = rownames(wgt.matrix)
+			cav.out = paste( opt$out , wgtlist$ID[w] , "CAVIAR" , sep='.' )
+			write.table( format(cur.LD,digits=3) , quote=F , col.names=F , row.names=F , file = paste( cav.out , ".LD" , sep='' ) )
+			write.table( format(wgt.matrix[,eqtlmod],digits=3) , quote=F , col.names=F , sep='\t' , file = paste( cav.out , ".EQTL.Z" , sep='') )
+			write.table( format(cur.Z,digits=3) , quote=F , col.names=F , sep='\t' , file = paste( cav.out , ".GWAS.Z" , sep='') )
+		}		
 	}
 	
 	topgwas = which.max( cur.Z^2 )

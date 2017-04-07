@@ -1,3 +1,6 @@
+# ==== TODO
+# * Make sure BLUP/BSLMM weights are being scaled properly based on MAF
+
 suppressMessages(library("optparse"))
 suppressMessages(library('plink2R'))
 suppressMessages(library('glmnet'))
@@ -228,8 +231,16 @@ hsq.pv = NA
 genos = read_plink(geno.file,impute="avg")
 mafs = apply(genos$bed,2,mean)/2
 sds = apply(genos$bed,2,sd)
+# important : genotypes are standardized and scaled here:
 genos$bed = scale(genos$bed)
 pheno = genos$fam[,c(1,2,6)]
+
+# check if any genotypes are NA
+nasnps = apply( is.na(genos$bed) , 2 , sum )
+if ( sum(nasnps) != 0 ) {
+	cat( "WARNING :",sum(nasnps != 0),"SNPs could not be scaled and were zeroed out, make sure all SNPs are polymorphic\n" , file=stderr())
+	genos$bed[,nasnps != 0] = 0
+}
 
 if ( opt$verbose >= 1 ) cat(nrow(pheno),"phenotyped samples, ",nrow(genos$bed),"genotyped samples, ",ncol(genos$bed)," markers\n")
 
