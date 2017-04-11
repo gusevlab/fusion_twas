@@ -140,7 +140,7 @@ if ( !is.na(opt$hsq_set) && system( opt$PATH_gcta , ignore.stdout=T,ignore.stder
 	q()
 }
 
-if ( sum(models=="bslmm") != 0 && system( paste(opt$PATH_gemma,"--help") , ignore.stdout=T,ignore.stderr=T ) != 0 ){
+if ( sum(models=="bslmm") != 0 && system( paste(opt$PATH_gemma,"-h") , ignore.stdout=T,ignore.stderr=T ) != 0 ){
 	cat( "ERROR: gemma could not be executed, set with --PATH_gemma or remove 'bslmm' from models\n" , sep='', file=stderr() )
 	cleanup()
 	q()
