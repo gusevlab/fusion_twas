@@ -15,13 +15,19 @@ option_list = list(
   make_option("--force_model", action="store", default=NA, type='character',
               help="Force specific predictive model to be used, no flag (default) means select most significant cross-val. Options: blup,lasso,top1,enet"),
   make_option("--caviar", action="store_true", default=FALSE,
-              help="Generate eCAVIAR-format (Z,LD) files for fine-mapping [default off]"),				  
+              help="Generate eCAVIAR-format (Z,LD) files for fine-mapping [default off]"),
+  make_option("--jlim", action="store_true", default=FALSE,
+              help="NOT IMPLEMENTED: Compute JLIM statistic [Chun et al Nat Genet 2017].\nRequires jlimR library installed. [default: %default]"),			  
   make_option("--perm", action="store", default=0, type='integer',
               help="Maximum number of permutations to perform for each feature test [default: 0/off]"),
   make_option("--perm_minp", action="store", default=0.05, type='double',
               help="Minimum p-value for which to initiate permutation test, if --perm flag present [default: %default]"),    		  
   make_option("--chr", action="store", default=NA, type='character',
-              help="Chromosome to analyze, currently only single chromosome analyses are performed [required]")					  
+              help="Chromosome to analyze, currently only single chromosome analyses are performed [required]"),
+  make_option("--coloc_P", action="store", default=NA, type='double',
+              help="P-value below which to compute COLOC statistic [Giambartolomei et al PLoS Genet 2013]\nRequires coloc library installed and --GWASN flag. [default NA/off]"),
+  make_option("--GWASN", action="store", default=NA, type='integer',
+              help="Total GWAS/sumstats sample size for inference of standard effect size.")
 )
 
 opt = parse_args(OptionParser(option_list=option_list))
@@ -61,6 +67,27 @@ chr = unique(wgtlist$CHR)
 
 N = nrow(wgtlist)
 out.tbl = data.frame( "FILE" = character(N) , "ID" = character(N) , "CHR" = numeric(N) , "P0" = numeric(N) , "P1" = numeric(N) ,"HSQ" = numeric(N) , "BEST.GWAS.ID" = character(N) , "BEST.GWAS.Z" = numeric(N) , "EQTL.ID" = character(N) , "EQTL.R2" = numeric(N) , "EQTL.Z" = numeric(N) , "EQTL.GWAS.Z" = numeric(N) , "NSNP" = numeric(N) , "NWGT" = numeric(N) , "MODEL" = character(N) , "MODELCV.R2" = numeric(N) , "MODELCV.PV" = numeric(N) , "TWAS.Z" = numeric(N) , "TWAS.P" = numeric(N) , stringsAsFactors=FALSE )
+
+if ( opt$jlim ) {
+	suppressMessages(library('jlimR'))
+	jlim.r2res = 0.8
+	jlim.thresholdingP = 0.1
+	out.tbl$JLIM.P = numeric(N)
+	out.tbl$JLIM.STAT = numeric(N)
+}
+
+if ( !is.na(opt$coloc_P) ) {
+	if ( is.na(opt$GWASN) || opt$GWASN < 1 ) {
+		cat("ERROR : --GWASN flag required to be positive integer for COLOC analysis\n")
+		q()
+	}
+	suppressMessages(library('coloc'))
+	out.tbl$COLOC.PP0 = as.numeric(rep(NA,N))
+	out.tbl$COLOC.PP1 = as.numeric(rep(NA,N))
+	out.tbl$COLOC.PP2 = as.numeric(rep(NA,N))
+	out.tbl$COLOC.PP3 = as.numeric(rep(NA,N))
+	out.tbl$COLOC.PP4 = as.numeric(rep(NA,N))
+}
 
 if ( !is.na(opt$perm) && opt$perm > 0 ) {
 	out.tbl$PERM.PV = numeric(N)
@@ -236,14 +263,24 @@ for ( w in 1:nrow(wgtlist) ) {
 		out.tbl$EQTL.GWAS.Z[w] = cur.Z[ topeqtl ]
 		
 		# write CAVIAR inputs
-		if( !is.na(opt$caviar) ) {
+		if( opt$caviar ) {
 			cur.Z = as.matrix(cur.Z,ncol=1)
 			rownames(cur.Z) = rownames(wgt.matrix)
 			cav.out = paste( opt$out , wgtlist$ID[w] , "CAVIAR" , sep='.' )
 			write.table( format(cur.LD,digits=3) , quote=F , col.names=F , row.names=F , file = paste( cav.out , ".LD" , sep='' ) )
 			write.table( format(wgt.matrix[,eqtlmod],digits=3) , quote=F , col.names=F , sep='\t' , file = paste( cav.out , ".EQTL.Z" , sep='') )
 			write.table( format(cur.Z,digits=3) , quote=F , col.names=F , sep='\t' , file = paste( cav.out , ".GWAS.Z" , sep='') )
-		}		
+		}
+		
+		# perform JLIM test
+		if ( opt$jlim ) {
+			jlim.lambda.t = jlimR:::calc.stat( cur.Z , wgt.matrix[,eqtlmod] , cur.LD , cur.LD , jlim.r2res )
+			# TODO : Sample permuted eQTL Z-scores from the MvN using LD matrix
+			jlim.nulldist = jlimR:::perm.test( cur.Z , wgt.matrix[,eqtlmod], permmat, cur.LD, cur.LD, jlim.thresholdingP, jlim.r2res, jlim.lambda.t)
+			permP = sum(jlim.nulldist >= jlim.lambda.t, na.rm = TRUE)/sum(!is.na(NULLDIST))
+			out.tbl$JLIM.STAT[w] = jlim.lambda.t
+			out.tbl$JLIM.P[w] = permP		
+		}
 	}
 	
 	topgwas = which.max( cur.Z^2 )
@@ -258,13 +295,31 @@ for ( w in 1:nrow(wgtlist) ) {
 	if ( !cur.FAIL ) {
 		out.tbl$NWGT[w] = sum( wgt.matrix[,mod.best] != 0 )
 		out.tbl$TWAS.Z[w] = cur.twas
+		out.tbl$TWAS.P[w] = 2*(pnorm( abs(out.tbl$TWAS.Z[w]) , lower.tail=F))
 	} else {
 		out.tbl$TWAS.Z[w] = NA
+		out.tbl$TWAS.P[w] = NA
 	}
+
+	# perform COLOC test
+	if ( !is.na(opt$coloc_P) && !is.na(out.tbl$TWAS.Z[w]) && out.tbl$TWAS.P[w] < opt$coloc_P ) {
+		b1 = wgt.matrix[,eqtlmod] / sqrt(wgtlist$N[w])
+		b2 = cur.Z / sqrt(opt$GWASN)
+
+		vb1 = rep(1/wgtlist$N[w],length(b1))
+		vb2 = rep(1/opt$GWASN,length(b2))
+
+		err = suppressMessages(capture.output(clc <- coloc.abf(dataset1=list(beta=b1,varbeta=vb1,type="quant",N=wgtlist$N[w],sdY=1),dataset2=list(beta=b2,varbeta=vb2,type="quant",N=opt$GWASN,sdY=1))))
+		out.tbl$COLOC.PP0[w] = round(clc$summary[2],3)
+		out.tbl$COLOC.PP1[w] = round(clc$summary[3],3)
+		out.tbl$COLOC.PP2[w] = round(clc$summary[4],3)
+		out.tbl$COLOC.PP3[w] = round(clc$summary[5],3)
+		out.tbl$COLOC.PP4[w] = round(clc$summary[6],3)
+	}	
 }
 
 # compute p-value
-out.tbl$TWAS.P = 2*(pnorm( abs(out.tbl$TWAS.Z) , lower.tail=F))
+#out.tbl$TWAS.P = 2*(pnorm( abs(out.tbl$TWAS.Z) , lower.tail=F))
 
 # WRITE MHC TO SEPARATE FILE
 mhc = out.tbl$CHR == 6 & out.tbl$P0 > 26e6 & out.tbl$P1 < 34e6

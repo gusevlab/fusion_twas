@@ -49,19 +49,25 @@ option_list = list(
   make_option("--locus_win", action="store", default=100e3, type='integer',
               help="How much to expand each feature (in bp) to define contiguous loci [default: %default]"),       
   make_option("--plot", action="store_true", default=FALSE,
-              help="Generate pdf plots for each locus"),
+              help="Generate pdf plots for each locus [default: OFF]"),
   make_option("--plot_legend", action="store", default=NA, type='character',
-              help="Add a legend to the plot to color code reference panels [options: all/joint for which genes to include] "),			  
+              help="Add a legend to the plot to color code reference panels [options: all/joint for which genes to include]"),
+  make_option("--plot_individual", action="store_true", default=FALSE,
+              help="Plot conditional analyses of individual genes [default: OFF]"),  
+  make_option("--plot_eqtl", action="store_true", default=FALSE,
+              help="Plot eQTL signal below GWAS signal (requires --plot; --plot_individual when multiple genes associated) [default: OFF]"),
+  make_option("--plot_scatter", action="store_true", default=FALSE,
+              help="Plot TWAS scatterplot (requires --plot; --plot_individual when multiple genes associated) [default: OFF]"),
   make_option("--omnibus", action="store_true", default=FALSE,
               help="Perform the omnibus test for genes (ID field) with multiple models (FILE field). NOTE: This disables all other tests."),
   make_option("--omnibus_corr", action="store", default=NA, type='character',
               help="Only print the pairwise correlations between reference panels for the specified model [options: top1,blup,bslmm,enet,lasso or best]"),
   make_option("--ldsc", action="store_true", default=FALSE,
-              help="Compute LD-scores across all features. NOTE: This disables all other tests."),            
+              help="Compute LD-scores across all features. NOTE: This disables all other tests."),             
   make_option("--save_loci", action="store_true", default=FALSE,
-              help="Save conditioned GWAS results for each locus [default: %default]"),                            			  
+              help="Save conditioned GWAS results for each locus [default: %default]"),
   make_option("--chr", action="store", default=NA, type='character',
-              help="Chromosome to analyze, currently only single chromosome analyses are performed [required]")            
+              help="Chromosome to analyze, currently only single chromosome analyses are performed [required]")                   
 )
 
 opt = parse_args(OptionParser(option_list=option_list))
@@ -69,8 +75,6 @@ options( digits = 3 )
 
 # --- TODO
 # Allow list of sumstats files from multiple GWAS panels
-# Compute LDSC for each gene (?) to estimate heritability and rho_g
-# Plotting: For joint output, print genes color-coded by reference panel and legend
 # Plotting: Heatmap of correlations between predictors across all genes 
 # ---
 
@@ -86,9 +90,21 @@ genos$bed = scale(genos$bed)
 N = nrow(genos$fam)
 
 if ( opt$plot ) {
-	glist = read.table("glist-hg19",as.is=T)
-	glist = glist[glist[,1] == chr,]
+	if ( opt$plot_eqtl && opt$plot_scatter ) {
+		cat( "WARNING: both --plot_eqtl and --plot_scatter cannot be enabled, plotting eQTL only\n" , file=stderr() )
+		opt$plot_scatter = FALSE
+	}
+	
+	if ( !file.exists("glist-hg19") ) {
+		cat( "WARNING: glist-hg19 file listing gene locations (with header: CHR P0 P1 ID) needed for locus plots\n" , file=stderr() )
+		glist = matrix(nrow=0,ncol=4)
+	} else {
+		glist = read.table("glist-hg19",as.is=T)
+		glist = glist[glist[,1] == chr,]
+	}
 	names(glist) = c("CHR","P0","P1","ID")	
+} else if ( opt$plot_individual || opt$plot_legend || opt$plot_eqtl ) {
+	cat( "WARNING: plotting flags set without --plot, figures will not be generated\n" , file=stderr() )
 }
 
 # --- OMNIBUS TEST ACROSS MATCHING FEATURES
@@ -183,7 +199,13 @@ if ( opt$omnibus ) {
 genos.keep = rep(F,nrow(genos$bim))
 # matrix for predicted expression:
 ge_g.matrix = matrix(nrow=nrow(genos$bed),ncol=nrow(wgtlist))
-	
+
+# matrix for eQTL
+if ( opt$plot_eqtl ) {
+	eqtl.z = list()
+	eqtl.pos = list()
+}
+
 for ( i in 1:nrow(wgtlist) ) {
 	load( wgtlist$FILE[i] )
 	wgt.matrix[is.na(wgt.matrix)] = 0
@@ -199,6 +221,10 @@ for ( i in 1:nrow(wgtlist) ) {
 	# Flip WEIGHTS for mismatching alleles
 	qc = allele.qc( snps[,5] , snps[,6] , cur.bim[,5] , cur.bim[,6] )
 	wgt.matrix[qc$flip,] = -1 * wgt.matrix[qc$flip,]
+	if ( opt$plot_eqtl ) {
+		eqtl.pos[[i]] = snps[,4]
+		eqtl.z[[i]] = wgt.matrix[ , which(colnames(wgt.matrix) == "top1") ]
+	}
 	
 	# Predict into reference
 	mod = which(colnames(wgt.matrix) == wgtlist$MODEL[i])
@@ -330,12 +356,10 @@ dinv = solve(ge_g.ld[joint.keep,joint.keep])
 # iterate over loci
 for ( i in 1:length(cons.loc.starts) ) {
 	cur.keep = genos$bim[,4] > cons.loc.starts[i] & genos$bim[,4] < cons.loc.ends[i]
-
 	snp.z = sumstat$Z[ cur.keep ]
 	snp.ge.ld = t(genos$bed[,cur.keep]) %*% ge_g.matrix[,joint.keep] / ( N - 1 )
 
 	# TODO (optional) : impute any missing z-scores
-
 	snp.cond.b = snp.z - snp.ge.ld %*% (dinv %*% ge_g.z[joint.keep])
 	snp.cond.se = diag( sqrt( 1 - snp.ge.ld %*% ( dinv ) %*% t(snp.ge.ld) ) )
 
@@ -357,27 +381,26 @@ for ( i in 1:length(cons.loc.starts) ) {
 		cur.glist = cur.glist[ is.na( m ), ]
 
 		tot = nrow(cur.glist) + sum(ge.keep)
+	
+		pdf( file=paste(opt$out,".loc_",i,".pdf",sep='') , height = 2 + log(tot)/2 )
+		par( oma = c(5,4,0,0)+0.1 , mar=c(0,0,1,1)+0.1 , xpd=NA , las=1 )
 		
-		pdf( file=paste(opt$out,".loc_",i,".pdf",sep='') , height = 2 + tot/15 )
-		lay = matrix( c( rep(1,ceiling(tot/15)) ,2,2,2) , ncol=1 )
-		par( oma = c(5,4,0,0)+0.1 , mar=c(0,0,1,1)+0.1 , xpd=NA )
-		layout(lay)
-
-		# --- GENE PLOTTING
+		lay.eqtl = matrix( c( rep(1,ceiling(log(tot)/3)),2,2,3,3) , ncol=1 )
+		lay.gwas = matrix( c( rep(1,ceiling(log(tot)/2)),2,2,2) , ncol=1 )
+		lay.scatter = cbind(lay.gwas,lay.gwas,rep(3,nrow(lay.gwas)))
+		
+		if ( opt$plot_eqtl && sum(ge.keep) == 1 ) {
+			layout(lay.eqtl)
+		} else if ( opt$plot_scatter && sum(ge.keep) == 1 ) {
+			layout(lay.scatter)
+		} else {
+			layout(lay.gwas)
+		}
+		
 		plot( 0 , 0 , type="n" , ylim = c(-0.1,1.1) , xlim = range( genos$bim[ cur.keep , 4 ] / 1e6 ) , bty="n" , xlab="" , ylab="" , xaxt="n" , yaxt="n" )
-		
-		clr.fg = rep("gray30",nrow(cur.glist))
-		clr.bg = rep("gray",nrow(cur.glist))
 
-		# add in the features
-		clr.fg2 = rep("#3182bd", sum(ge.keep) )
-		clr.bg2 = rep("#deebf7", sum(ge.keep) )
-		clr.bg2[ joint.keep[ ge.keep ] ] = "#66bd63"
-		clr.fg2[ joint.keep[ ge.keep ] ] = "#1a9850"
-
-		clr.fg = c( clr.fg , clr.fg2 )
-		clr.bg = c( clr.bg , clr.bg2 )
-		
+		# --- Gene names and positions
+	
 		# color code for weights reference
 		if ( !is.na(opt$plot_legend) ) {
 		if ( opt$plot_legend == "all" ) {
@@ -397,26 +420,35 @@ for ( i in 1:length(cons.loc.starts) ) {
 			m = match( ref.names , uni.ref.names )
 			clr.leg = rep(NA , sum(ge.keep))
 			clr.leg[ joint.keep[ge.keep] ] = clr.ref[ m ]
-			
+		
 			clr.num = rep("",sum(ge.keep))			
 			clr.num[ joint.keep[ge.keep] ] = m
-			
+		
 			clr.leg = c( rep(NA,nrow(cur.glist)) , clr.leg )
 			clr.num = c( rep("",nrow(cur.glist)) , clr.num )		
 		}
 		}
 
-		# TODO : USE COLUMN NAMES INSTEAD OF IDS
-		cur.glist = rbind( cur.glist , wgtlist[ ge.keep , c("CHR","P0","P1","ID") ] )		
+		clr.fg = rep("gray30",nrow(cur.glist))
+		clr.bg = rep("gray",nrow(cur.glist))
+		clr.fg2 = rep("#3182bd", sum(ge.keep) )
+		clr.bg2 = rep("#deebf7", sum(ge.keep) )
+		clr.bg2[ joint.keep[ ge.keep ] ] = "#66bd63"
+		clr.fg2[ joint.keep[ ge.keep ] ] = "#1a9850"
+		clr.fg = c( clr.fg , clr.fg2 )
+		clr.bg = c( clr.bg , clr.bg2 )	
+				
+		cur.glist = rbind( cur.glist , wgtlist[ ge.keep , c("CHR","P0","P1","ID") ] )	
+			
 		ord = order(apply(cur.glist[,2:3],1,min))
-		cur.glist = cur.glist[ ord , ]
+		cur.glist = cur.glist[ ord , ]	
 		clr.fg = clr.fg[ ord ]
 		clr.bg = clr.bg[ ord ]
 		if ( !is.na( opt$plot_legend) ) {
 			clr.leg = clr.leg[ ord ]
 			clr.num = clr.num[ ord ]
 		}
-		
+	
 		cur.gstart = apply(cur.glist[,2:3],1,min)/1e6
 		cur.gend = apply(cur.glist[,2:3],1,max)/1e6
 		# compute size with text
@@ -429,7 +461,7 @@ for ( i in 1:length(cons.loc.starts) ) {
 			while ( sum(cur.gstart[g] - g.size < cur.gend & cur.gend[g] > cur.gstart - g.size & g.ypos == cur.row) != 0 ) cur.row = cur.row + 1
 			g.ypos[g] = cur.row
 		}
-		
+	
 		# compute text scaling
 		txt.scale = min( 1 , ( 1 / (1+max(g.ypos)) ) / g.ysize )
 		# rescale ypos to between 0 and 1
@@ -438,22 +470,84 @@ for ( i in 1:length(cons.loc.starts) ) {
 		} else {
 			g.ypos = (g.ypos - 1) * g.ysize * 1.5
 		}
-		rect( cur.gstart , g.ypos - txt.scale*g.ysize*0.45 , cur.gend , g.ypos + txt.scale*g.ysize*0.45 , border=clr.fg , col=clr.bg )
-		text( cur.gstart , g.ypos , cur.glist[,4] , pos=2 , cex=txt.scale , col=clr.fg )
-		
-		if ( !is.na( opt$plot_legend) ) {
-			# legend dots
-			points( cur.gend + strwidth('*') , g.ypos , pch=19 , col=clr.leg , cex=txt.scale )
-			text( cur.gend + strwidth('*') , g.ypos , clr.num , pch=19 , cex=txt.scale * 0.5 )
-			legend( "topleft" , legend=paste(1:(length(uni.ref.names)),uni.ref.names), pch=19 , cex=txt.scale , col=clr.ref , bty="n" )
-		}
-		# --- DONE GENE PLOTTING
+		# --- done with gene names and positions
+					
+		g.ctr = 1
+		cur.gene = which(ge.keep)[ g.ctr ]		
+		while ( TRUE ) {
+			# --- GENE PLOTTING
+			if ( g.ctr > 1 ) {
+				if ( opt$plot_eqtl ) {
+					layout(lay.eqtl)
+				} else if ( opt$plot_scatter ) {
+					layout(lay.scatter)
+				} else {		
+					layout(lay.gwas)
+				}	
+				plot( 0 , 0 , type="n" , ylim = c(-0.1,1.1) , xlim = range( genos$bim[ cur.keep , 4 ] / 1e6 ) , bty="n" , xlab="" , ylab="" , xaxt="n" , yaxt="n" )
+				clr.fg = rep("gray30",nrow(cur.glist))
+				clr.bg = rep("gray",nrow(cur.glist))
+				clr.bg[ cur.glist$ID == wgtlist$ID[ cur.gene ] ] = "#66bd63"
+				clr.fg[ cur.glist$ID == wgtlist$ID[ cur.gene ] ] = "#1a9850"		
+			}
+			
+			rect( cur.gstart , g.ypos - txt.scale*g.ysize*0.45 , cur.gend , g.ypos + txt.scale*g.ysize*0.45 , border=clr.fg , col=clr.bg )
+			text( cur.gstart , g.ypos , cur.glist[,4] , pos=2 , cex=txt.scale , col=clr.fg )
+			if ( !is.na( opt$plot_legend) ) {
+				# legend dots
+				points( cur.gend + strwidth('*') , g.ypos , pch=19 , col=clr.leg , cex=txt.scale )
+				text( cur.gend + strwidth('*') , g.ypos , clr.num , pch=19 , cex=txt.scale * 0.5 )
+				legend( "topleft" , legend=paste(1:(length(uni.ref.names)),uni.ref.names), pch=19 , cex=txt.scale , col=clr.ref , bty="n" )
+			}
+			# --- DONE GENE PLOTTING
 
-		# Manhattan plots:
-		pv = 2*(pnorm( abs(snp.z) , lower.tail=F))
-		plot( genos$bim[ cur.keep , 4 ] / 1e6 , -log10(pv) , pch=19 , cex=0.5 , col="gray" , xlab=paste("chr ", chr , " physical position (MB)",sep='') , ylab="-log10(P-value)" , bty="n" )
-		pv.cond = 2*(pnorm( abs(snp.cond.z) , lower.tail=F))
-		points( genos$bim[ cur.keep , 4 ] / 1e6 , -log10(pv.cond) , pch=19 , cex=0.5 , col="#3182bd" )
+			# Manhattan plots:
+			pv = 2*(pnorm( abs(snp.z) , lower.tail=F))
+			if ( opt$plot_eqtl && ( sum(ge.keep) == 1 || g.ctr > 1 ) ) {
+				plot( genos$bim[ cur.keep , 4 ] / 1e6 , -log10(pv) , pch=19 , cex=0.5 , col="gray" , xlab="" , ylab="-log10(P-value)" , bty="n" )				
+			} else {			
+				plot( genos$bim[ cur.keep , 4 ] / 1e6 , -log10(pv) , pch=19 , cex=0.5 , col="gray" , xlab=paste("chr ", chr , " physical position (MB)",sep='') , ylab="-log10(P-value)" , bty="n" )
+			}
+			if ( g.ctr == 1 ) {
+				pv.cond = 2*(pnorm( abs(snp.cond.z) , lower.tail=F))
+			} else {
+				pv.cond = 2*(pnorm( abs(cur.snp.cond.z) , lower.tail=F))
+			}
+			points( genos$bim[ cur.keep , 4 ] / 1e6 , -log10(pv.cond) , pch=19 , cex=0.5 , col="#3182bd" )
+			
+			# EQTL plots
+			if ( sum(ge.keep) == 1 || g.ctr > 1 ) {
+				if ( opt$plot_scatter ) {
+					plot( snp.ge.ld , snp.z  , pch=19 , cex=0.5 , xlab="Corr. to TWAS" , ylab="GWAS Z-score" , xlim=c(-1,1) , ylim=c(-1*max(abs(snp.z)),max(abs(snp.z))) )	
+					par(xpd=F)
+					abline( 0 , ge_g.z[cur.gene] , lty=2 )
+					par(xpd=NA)					
+				} else if ( opt$plot_eqtl ) {
+					pv.eqtl = 2*(pnorm( abs(eqtl.z[[ cur.gene ]] ) , lower.tail=F ))
+					plot( eqtl.pos[[cur.gene]] / 1e6 , -log10(pv.eqtl) , xlim=range( genos$bim[ cur.keep , 4 ] / 1e6 ) , pch=19 , cex=0.5 , col="#3182bd" , xlab=paste("chr ", chr , " physical position (MB)",sep='') , ylab="-log10(P-value)" , bty="n" )
+				} 
+			}
+			
+			# Now plot each individual gene or exit
+			if ( sum(ge.keep) > 1 && opt$plot_individual && g.ctr <= sum(ge.keep) ) {
+				cur.gene = which(ge.keep)[ g.ctr ]
+				snp.ge.ld = t(genos$bed[,cur.keep]) %*% ge_g.matrix[,cur.gene] / ( N - 1 )
+
+				snp.cond.b = snp.z - snp.ge.ld %*% ge_g.z[cur.gene]
+				snp.cond.se = diag( sqrt( 1 - snp.ge.ld %*% t(snp.ge.ld) ) )
+
+				# zero out any SNPs with > max_r2 LD to a gene
+				autocor = apply(snp.ge.ld^2,1,max,na.rm=T) > opt$max_r2
+				snp.cond.b[ autocor ] = NA
+				snp.cond.se[ autocor ] = NA
+				
+				# save conditional z-score for this gene separately from main conditional result
+				cur.snp.cond.z = snp.cond.b / snp.cond.se
+				g.ctr = g.ctr + 1
+			} else {
+				break()
+			}
+		}
 		dev.off()
 	}
 
@@ -468,4 +562,3 @@ for ( i in 1:length(cons.loc.starts) ) {
 	cat( "locus " , i , " best conditioned Chisq\t" , max(snp.cond.z^2,na.rm=T) , '\n' , sep='' )
 }
 # --- DONE CONDITIONAL ANALYSIS
-
