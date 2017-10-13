@@ -31,7 +31,11 @@ option_list = list(
               help="How many folds of cross-validation, 0 to skip [default: %default]"),
   make_option("--verbose", action="store", default=1, type="integer",
               help="How much chatter to print: 0=nothing; 1=minimal; 2=all [default: %default]"),
-  make_option("--save_hsq", action="store_true", default=FALSE, type="integer",
+  make_option("--noclean", action="store_true", default=FALSE,
+              help="Do not delete any temporary files (for debugging) [default: %default]"),
+  make_option("--rn", action="store_true", default=FALSE,
+              help="Rank-normalize the phenotype after all QC: [default: %default]"),
+  make_option("--save_hsq", action="store_true", default=FALSE,
               help="Save heritability results even if weights are not computed [default: %default]"),			  
   make_option("--models", action="store", default="blup,lasso,top1,enet", type='character',
               help="Comma-separated list of prediction models [default: %default]\n
@@ -111,8 +115,10 @@ weights.enet = function( genos , pheno , alpha=0.5 ) {
 
 # --- CLEANUP
 cleanup = function() {
-	arg = paste("rm -f " , opt$tmp , "*", sep='')
-	system(arg)
+	if ( ! opt$noclean ) {
+		arg = paste("rm -f " , opt$tmp , "*", sep='')
+		system(arg)
+	}
 }
 
 # Perform i/o checks here:
@@ -178,7 +184,8 @@ if ( !is.na(opt$covar) ) {
 	covar = covar[m,]
 	reg = summary(lm( pheno[,3] ~ as.matrix(covar[,3:ncol(covar)]) ))
 	if ( opt$verbose >= 1 ) cat( reg$r.sq , "variance in phenotype explained by covariates\n" )
-	pheno[,3] = reg$resid	
+	pheno[,3] = scale(reg$resid)
+	raw.pheno.file = pheno.file
 	pheno.file = paste(pheno.file,".resid",sep='')
 	write.table(pheno,quote=F,row.names=F,col.names=F,file=pheno.file)	
 }
@@ -197,7 +204,11 @@ arg = paste( opt$PATH_plink," --allow-no-sex --bfile ",opt$tmp," --make-grm-bin 
 system(arg , ignore.stdout=SYS_PRINT,ignore.stderr=SYS_PRINT)
 
 # 2. estimate heritability
+if ( !is.na(opt$covar) ) {
+arg = paste( opt$PATH_gcta ," --grm ",opt$tmp," --pheno ",raw.pheno.file," --qcovar ",opt$covar," --out ",opt$tmp," --reml --reml-no-constrain --reml-lrt 1",sep='')
+} else {
 arg = paste( opt$PATH_gcta ," --grm ",opt$tmp," --pheno ",pheno.file," --out ",opt$tmp," --reml --reml-no-constrain --reml-lrt 1",sep='')
+}
 system(arg , ignore.stdout=SYS_PRINT,ignore.stderr=SYS_PRINT)
 
 # 3. evaluate LRT and V(G)/Vp
@@ -234,6 +245,13 @@ sds = apply(genos$bed,2,sd)
 # important : genotypes are standardized and scaled here:
 genos$bed = scale(genos$bed)
 pheno = genos$fam[,c(1,2,6)]
+pheno[,3] = scale(pheno[,3])
+
+if ( opt$rn ) {
+	library('GenABEL')
+	library(preprocessCore)
+	pheno[,3] = rntransform( pheno[,3] )
+}
 
 # check if any genotypes are NA
 nasnps = apply( is.na(genos$bed) , 2 , sum )
@@ -242,6 +260,7 @@ if ( sum(nasnps) != 0 ) {
 	genos$bed[,nasnps != 0] = 0
 }
 
+N.tot = nrow(genos$bed)
 if ( opt$verbose >= 1 ) cat(nrow(pheno),"phenotyped samples, ",nrow(genos$bed),"genotyped samples, ",ncol(genos$bed)," markers\n")
 
 # --- CROSSVALIDATION ANALYSES
@@ -336,7 +355,7 @@ for ( mod in 1:M ) {
 
 # save weights, rsq, p-value for each model, and hsq to output
 snps = genos$bim
-save( wgt.matrix , snps , cv.performance , hsq, hsq.pv, file = paste( opt$out , ".wgt.RDat" , sep='' ) )
+save( wgt.matrix , snps , cv.performance , hsq, hsq.pv, N.tot , file = paste( opt$out , ".wgt.RDat" , sep='' ) )
 # --- CLEAN-UP
 if ( opt$verbose >= 1 ) cat("Cleaning up\n")
 cleanup()

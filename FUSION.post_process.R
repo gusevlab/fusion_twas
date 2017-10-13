@@ -52,6 +52,8 @@ option_list = list(
               help="Generate pdf plots for each locus [default: OFF]"),
   make_option("--plot_legend", action="store", default=NA, type='character',
               help="Add a legend to the plot to color code reference panels [options: all/joint for which genes to include]"),
+  make_option("--plot_corr", action="store_true", default=FALSE,
+              help="Plot correlation of genetic values for each locus (requires corrplot library) [default: OFF]"),  
   make_option("--plot_individual", action="store_true", default=FALSE,
               help="Plot conditional analyses of individual genes [default: OFF]"),  
   make_option("--plot_eqtl", action="store_true", default=FALSE,
@@ -103,7 +105,7 @@ if ( opt$plot ) {
 		glist = glist[glist[,1] == chr,]
 	}
 	names(glist) = c("CHR","P0","P1","ID")	
-} else if ( opt$plot_individual || opt$plot_legend || opt$plot_eqtl ) {
+} else if ( (!is.na(opt$plot_individual) && opt$plot_individual) || (!is.na(opt$plot_legend) && opt$plot_legend) || (!is.na(opt$plot_eqtl) && opt$plot_eqtl) ) {
 	cat( "WARNING: plotting flags set without --plot, figures will not be generated\n" , file=stderr() )
 }
 
@@ -248,6 +250,17 @@ if ( opt$ldsc ) {
 ge_g.ld = cor(ge_g.matrix)
 ge_g.z = wgtlist$TWAS.Z
 zthresh = qnorm( opt$minp_joint / 2,lower.tail=F)
+
+if ( opt$plot_corr ) {
+	rownames(ge_g.ld) = wgtlist$ID
+	colnames(ge_g.ld) = rep("_",ncol(ge_g.ld))
+	library("corrplot")
+	pdf( file=paste(opt$out,".corrplot.pdf",sep=''))
+	par(cex = 0.3)
+	corrplot( ge_g.ld^2 , method="color" , type="upper" , order="hclust" , addCoef.col="black" , tl.cex=0.5/0.3 , col=colorRampPalette(c("blue","white","red"))(200) ,  cl.lim=c(0,1))
+	par(cex = 1 )
+	dev.off()
+}
 	
 # zero out low LD
 ge_g.ld[ ge_g.ld^2 < opt$min_r2 ] = 0
