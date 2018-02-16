@@ -171,6 +171,13 @@ if ( !is.na(opt$pheno) ) {
 	write.table(pheno,quote=F,row.names=F,col.names=F,file=pheno.file)
 }
 
+if ( opt$rn ) {
+	library('GenABEL')
+	library(preprocessCore)
+	pheno[,3] = rntransform( pheno[,3] )
+	write.table(pheno,quote=F,row.names=F,col.names=F,file=pheno.file)
+}
+
 # Load in the covariates if needed
 if ( !is.na(opt$covar) ) {
 	covar = ( read.table(opt$covar,as.is=T,head=T) )
@@ -246,12 +253,6 @@ sds = apply(genos$bed,2,sd)
 genos$bed = scale(genos$bed)
 pheno = genos$fam[,c(1,2,6)]
 pheno[,3] = scale(pheno[,3])
-
-if ( opt$rn ) {
-	library('GenABEL')
-	library(preprocessCore)
-	pheno[,3] = rntransform( pheno[,3] )
-}
 
 # check if any genotypes are NA
 nasnps = apply( is.na(genos$bed) , 2 , sum )
