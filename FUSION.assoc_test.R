@@ -18,6 +18,10 @@ option_list = list(
               help="Generate eCAVIAR-format (Z,LD) files for fine-mapping [default off]"),
   make_option("--jlim", action="store_true", default=FALSE,
               help="NOT IMPLEMENTED: Compute JLIM statistic [Chun et al Nat Genet 2017].\nRequires jlimR library installed. [default: %default]"),			  
+  make_option("--max_impute", action="store", default=0.5 , type='double',
+              help="Maximum fraction of SNPs allowed to be missing per gene (will be imputed using LD). [default: %default]"),			  
+  make_option("--min_r2pred", action="store", default=0.7 , type='double',
+              help="Minimum average LD-based imputation accuracy allowed for expression weight SNP Z-scores. [default: %default]"),			  
   make_option("--perm", action="store", default=0, type='integer',
               help="Maximum number of permutations to perform for each feature test [default: 0/off]"),
   make_option("--perm_minp", action="store", default=0.05, type='double',
@@ -51,6 +55,8 @@ allele.qc = function(a1,a2,ref1,ref2) {
 
 	snp = list()
 	snp[["keep"]] = !((a1=="A" & a2=="T") | (a1=="T" & a2=="A") | (a1=="C" & a2=="G") | (a1=="G" & a2=="C"))
+	snp[["keep"]][ a1 != "A" & a1 != "T" & a1 != "G" & a1 != "C" ] = F
+	snp[["keep"]][ a2 != "A" & a2 != "T" & a2 != "G" & a2 != "C" ] = F
 	snp[["flip"]] = (a1 == ref2 & a2 == ref1) | (a1 == flip2 & a2 == flip1)
 
 	return(snp)
@@ -124,6 +130,8 @@ if ( sum(!qc$keep) > 0 ) {
 
 # TODO: WARNING if too many NAs in summary stats
 
+FAIL.ctr = 0
+
 ## For each wgt file:
 for ( w in 1:nrow(wgtlist) ) {
 	#cat( unlist(wgtlist[w,]) , '\n' )
@@ -161,14 +169,14 @@ for ( w in 1:nrow(wgtlist) ) {
 	} else {
 		mod.best = (which.max(cv.performance[1,]))
 		if ( names(mod.best) == "top1" ) {
-			# cat( "WARNING: top eQTL is the best predictor for this gene, continuing with 2nd-best model\n" )
+#			cat( "WARNING :",  unlist(wgtlist[w,]) , "top eQTL is the best predictor for this gene, continuing with 2nd-best model (top eQTL results will also be reported)\n" )
 			mod.best = names( which.max(cv.performance[1,colnames(cv.performance)!="top1"]) )
 			mod.best = which( colnames(cv.performance) == mod.best )
 		}
 	}
 	
-	if ( sum(wgt.matrix) == 0 ) {
-		cat( "WARNING : " , unlist(wgtlist[w,]) , "had", length(cur.Z) , "overlapping SNPs, but non with non-zero expression weights, try more SNPS or a different model\n")
+	if ( sum(wgt.matrix[, mod.best] != 0) == 0 ) {
+		cat( "WARNING : " , unlist(wgtlist[w,]) , names(cv.performance)[ mod.best ] , "had", length(cur.Z) , "overlapping SNPs, but none with non-zero expression weights, try more SNPS or a different model\n")
 		cur.FAIL = TRUE
 	}
 
@@ -177,65 +185,78 @@ for ( w in 1:nrow(wgtlist) ) {
 		cat( "WARNING : " , unlist(wgtlist[w,]) , " had no overlapping SNPs\n")
 		cur.FAIL = TRUE
 		out.tbl$NSNP[w] = NA
-	} else {
+	} else if ( !cur.FAIL ) {
 		cur.LD = t(cur.genos) %*% cur.genos / (nrow(cur.genos)-1)	
 		out.tbl$NSNP[w] = nrow(cur.LD)
 		cur.miss = is.na(cur.Z)
 		# Impute missing Z-scores
 		if ( sum(cur.miss) != 0 ) {
 			if ( sum(!cur.miss) == 0 ) {
-				cat( "WARNING : " , unlist(wgtlist[w,]) , " had no overlapping GWAS Z-scores\n")
+				cat( "WARNING : " , unlist(wgtlist[w,]) , "had no overlapping GWAS Z-scores, skipping this gene\n")
+				cur.FAIL = TRUE
+			} else if ( mean(cur.miss) > opt$max_impute ) {
+				cat( "WARNING : " , unlist(wgtlist[w,]) , "had" , sum(cur.miss) , "/" , length(cur.miss) , "non-overlapping GWAS Z-scores, skipping this gene.\n")
 				cur.FAIL = TRUE
 			} else {
 				cur.wgt =  cur.LD[cur.miss,!cur.miss] %*% solve( cur.LD[!cur.miss,!cur.miss] + 0.1 * diag(sum(!cur.miss)) )
 				cur.impz = cur.wgt %*% cur.Z[!cur.miss]
 				cur.r2pred = diag( cur.wgt %*% cur.LD[!cur.miss,!cur.miss] %*% t(cur.wgt) )
 				cur.Z[cur.miss] = cur.impz / sqrt(cur.r2pred)
-			}
-		}
 
-	if ( !cur.FAIL ) {
-		# Compute TWAS Z-score
-		cur.twasz = wgt.matrix[,mod.best] %*% cur.Z
-		cur.twasr2pred = wgt.matrix[,mod.best] %*% cur.LD %*% wgt.matrix[,mod.best]
-				
-		if ( cur.twasr2pred > 0 ) {
-			cur.twas = cur.twasz / sqrt(cur.twasr2pred)
-			# Perform the permutation test
-			if ( !is.na(opt$perm) && opt$perm > 0 && cur.twas^2 > permz^2 ) {
-				perm.twas = rep(NA,opt$perm)
-				perm.pval = NA
-				for ( i in 1:opt$perm ) {
-					perm.wgt = wgt.matrix[ sample( nrow(wgt.matrix) ) , mod.best ]
-					perm.twas[i] = perm.wgt %*% cur.Z / sqrt( perm.wgt %*% cur.LD %*% perm.wgt )
-				
-					# adaptive permutation, stop if 10 instances were observed
-					# see: Che et al. PMC4070098 for derivations
-					if ( sum(perm.twas[1:i]^2 > cur.twas[1]^2) > 10 ) {
-						perm.pval = (sum(perm.twas[1:i]^2 > cur.twas[1]^2) + 1) / (i+1)
-						perm.N = i+1
-						break()
-					}
+				all.r2pred = rep(1,length(cur.Z))
+				all.r2pred[ cur.miss ] = cur.r2pred
+				if ( sum(is.na(all.r2pred)) != 0 ) {
+					cat( "WARNING : " , unlist(wgtlist[w,]) , "had missing GWAS Z-scores that could not be imputed, skipping this gene.\n" )
+					cur.FAIL = TRUE
+				} else if ( mean( all.r2pred[ wgt.matrix[,mod.best] != 0 ] ) < opt$min_r2pred ) {
+					cat( "WARNING : " , unlist(wgtlist[w,]) , "had mean GWAS Z-score imputation r2 of" , mean( all.r2pred[ wgt.matrix[,mod.best] != 0 ] ) , "at expression weight SNPs, skipping this gene.\n")
+					cur.FAIL = TRUE
 				}
-				
-				if ( is.na(perm.pval) ) {
-					perm.pval = sum(perm.twas^2 > cur.twas[1]^2) / opt$perm
-					perm.N = opt$perm
-					# also estimate analytical p-value based on mu+sd of the null			
-					anal.zscore = ( cur.twas[1] - 0 ) / sd( perm.twas , na.rm=T )
-				} else {
-					anal.zscore = NA
-				}
-			
-				out.tbl$PERM.PV[w] = perm.pval
-				out.tbl$PERM.N[w] = perm.N
-				out.tbl$PERM.ANL_PV[w] = 2*pnorm(abs(anal.zscore),lower.tail=F)
 			}
-		} else {
-			cur.FAIL=T
-			cat( "WARNING : " , unlist(wgtlist[w,]) , " had zero predictive accuracy, try a different model.\n")
 		}
-	}
+		
+		if ( !cur.FAIL ) {
+			# Compute TWAS Z-score
+			cur.twasz = wgt.matrix[,mod.best] %*% cur.Z
+			cur.twasr2pred = wgt.matrix[,mod.best] %*% cur.LD %*% wgt.matrix[,mod.best]
+					
+			if ( cur.twasr2pred > 0 ) {
+				cur.twas = cur.twasz / sqrt(cur.twasr2pred)
+				# Perform the permutation test
+				if ( !is.na(opt$perm) && opt$perm > 0 && cur.twas^2 > permz^2 ) {
+					perm.twas = rep(NA,opt$perm)
+					perm.pval = NA
+					for ( i in 1:opt$perm ) {
+						perm.wgt = wgt.matrix[ sample( nrow(wgt.matrix) ) , mod.best ]
+						perm.twas[i] = perm.wgt %*% cur.Z / sqrt( perm.wgt %*% cur.LD %*% perm.wgt )
+					
+						# adaptive permutation, stop if 10 instances were observed
+						# see: Che et al. PMC4070098 for derivations
+						if ( sum(perm.twas[1:i]^2 > cur.twas[1]^2) > 10 ) {
+							perm.pval = (sum(perm.twas[1:i]^2 > cur.twas[1]^2) + 1) / (i+1)
+							perm.N = i+1
+							break()
+						}
+					}
+					
+					if ( is.na(perm.pval) ) {
+						perm.pval = sum(perm.twas^2 > cur.twas[1]^2) / opt$perm
+						perm.N = opt$perm
+						# also estimate analytical p-value based on mu+sd of the null			
+						anal.zscore = ( cur.twas[1] - 0 ) / sd( perm.twas , na.rm=T )
+					} else {
+						anal.zscore = NA
+					}
+				
+					out.tbl$PERM.PV[w] = perm.pval
+					out.tbl$PERM.N[w] = perm.N
+					out.tbl$PERM.ANL_PV[w] = 2*pnorm(abs(anal.zscore),lower.tail=F)
+				}
+			} else {
+				cur.FAIL=T
+				cat( "WARNING : " , unlist(wgtlist[w,]) , " had zero predictive accuracy, try a different model.\n")
+			}
+		}
 	}
 
 	# populate the output
@@ -315,15 +336,23 @@ for ( w in 1:nrow(wgtlist) ) {
 		out.tbl$COLOC.PP2[w] = round(clc$summary[4],3)
 		out.tbl$COLOC.PP3[w] = round(clc$summary[5],3)
 		out.tbl$COLOC.PP4[w] = round(clc$summary[6],3)
-	}	
+	}
+	if ( cur.FAIL ) FAIL.ctr = FAIL.ctr + 1
 }
 
+cat("Analysis completed.\n")
+cat("NOTE:",FAIL.ctr,"/",nrow(wgtlist),"genes were skipped\n")
+if ( FAIL.ctr / nrow(wgtlist) > 0.1 ) {
+cat("If a large number of genes were skipped, verify that your GWAS Z-scores, expression weights, and LDREF data use the same SNPs (or nearly)\n")
+cat("Or consider pre-imputing your summary statistics to the LDREF markers using summary-imputation software such as [http://bogdan.bioinformatics.ucla.edu/software/impg/]\n")
+}
 # compute p-value
 #out.tbl$TWAS.P = 2*(pnorm( abs(out.tbl$TWAS.Z) , lower.tail=F))
 
 # WRITE MHC TO SEPARATE FILE
 mhc = out.tbl$CHR == 6 & out.tbl$P0 > 26e6 & out.tbl$P1 < 34e6
 if ( sum( mhc ) > 0 ) {
+	cat("Results in the MHC are written to",paste(opt$out,".MHC",sep=''),", evaluate with caution due to complex LD structure\n")
 	write.table( format( out.tbl[mhc,] , digits=3 ) , quote=F , row.names=F , sep='\t' , file=paste(opt$out,".MHC",sep='') )
 }
 write.table( format( out.tbl[!mhc,] , digits=3 ) , quote=F , row.names=F , sep='\t' , file=opt$out )
