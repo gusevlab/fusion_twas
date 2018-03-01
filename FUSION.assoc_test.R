@@ -37,6 +37,11 @@ option_list = list(
 opt = parse_args(OptionParser(option_list=option_list))
 
 allele.qc = function(a1,a2,ref1,ref2) {
+        a1 = toupper(a1)
+        a2 = toupper(a2)
+        ref1 = toupper(ref1)
+        ref2 = toupper(ref2)
+
 	ref = ref1
 	flip = ref
 	flip[ref == "A"] = "T"
