@@ -46,13 +46,11 @@ option_list = list(
               help="Path to LDSC format summary statistics [required]"),
   make_option("--ref_ld_chr", action="store", default=NA, type='character',
               help="Prefix to reference LD files in binary PLINK format by chromosome [required]"),
-  make_option("--minp_joint", action="store", default=0.05, type='double',
-              help="Minimum p-value to include feature in joint model [default: %default]"),
   make_option("--minp_input", action="store", default=1.0, type='double',
               help="Minimum p-value to include feature in analysis [default: %default]"),
   make_option("--max_r2", action="store", default=0.90, type='double',
               help="Features with r^2 greater than this will be considered identical [default: %default]"),		
-  make_option("--min_r2", action="store", default=0.008, type='double',
+  make_option("--min_r2", action="store", default=0.05, type='double',
               help="Features with r^2 less than this will be considered independent [default: %default]"),
   make_option("--locus_win", action="store", default=100e3, type='integer',
               help="How much to expand each feature (in bp) to define contiguous loci [default: %default]"),       
@@ -68,6 +66,8 @@ option_list = list(
               help="Plot eQTL signal below GWAS signal (requires --plot; --plot_individual when multiple genes associated) [default: OFF]"),
   make_option("--plot_scatter", action="store_true", default=FALSE,
               help="Plot TWAS scatterplot (requires --plot; --plot_individual when multiple genes associated) [default: OFF]"),
+  make_option("--report", action="store_true", default=FALSE,
+              help="Generate a report document with information on each locus [default: OFF]"),              
   make_option("--omnibus", action="store_true", default=FALSE,
               help="Perform the omnibus test for genes (ID field) with multiple models (FILE field). NOTE: This disables all other tests."),
   make_option("--omnibus_corr", action="store", default=NA, type='character',
@@ -85,7 +85,6 @@ options( digits = 3 )
 
 # --- TODO
 # Allow list of sumstats files from multiple GWAS panels
-# Plotting: Heatmap of correlations between predictors across all genes 
 # ---
 
 chr = opt$chr
@@ -112,8 +111,8 @@ if ( opt$plot ) {
 		glist = read.table("glist-hg19",as.is=T)
 		glist = glist[glist[,1] == chr,]
 	}
-	names(glist) = c("CHR","P0","P1","ID")	
-} else if ( (!is.na(opt$plot_individual) && opt$plot_individual) || (!is.na(opt$plot_legend) && opt$plot_legend) || (!is.na(opt$plot_eqtl) && opt$plot_eqtl) ) {
+	colnames(glist) = c("CHR","P0","P1","ID")	
+} else if ( (opt$plot_individual || !is.na(opt$plot_legend) || opt$plot_eqtl) ) {
 	cat( "WARNING: plotting flags set without --plot, figures will not be generated\n" , file=stderr() )
 }
 
@@ -257,13 +256,16 @@ if ( opt$ldsc ) {
 # compute gene LD matrix
 ge_g.ld = cor(ge_g.matrix)
 ge_g.z = wgtlist$TWAS.Z
-zthresh = qnorm( opt$minp_joint / 2,lower.tail=F)
+zthresh = qnorm( 0.05 / nrow( wgtlist ) / 2,lower.tail=F)
 
 if ( opt$plot_corr ) {
 	rownames(ge_g.ld) = wgtlist$ID
 	colnames(ge_g.ld) = rep("_",ncol(ge_g.ld))
 	library("corrplot")
+
+	
 	pdf( file=paste(opt$out,".corrplot.pdf",sep=''))
+
 	par(cex = 0.3)
 	corrplot( ge_g.ld^2 , method="color" , type="upper" , order="hclust" , addCoef.col="black" , tl.cex=0.5/0.3 , col=colorRampPalette(c("blue","white","red"))(200) ,  cl.lim=c(0,1))
 	par(cex = 1 )
@@ -273,17 +275,22 @@ if ( opt$plot_corr ) {
 # zero out low LD
 ge_g.ld[ ge_g.ld^2 < opt$min_r2 ] = 0
 
+
 # --- PERFORM FEATURE SELECTION
 cond.z = ge_g.z
 ge.keep = rep(F,length(ge_g.z))
+ge.drop = rep(F,length(ge_g.z))
+
 while ( sum(cond.z^2 > zthresh^2) != 0 ) {
+	prev.z = cond.z
+
 	# add most conditionally significant feature 
 	ge.keep[ which.max(cond.z^2) ] = T
 	cur.dinv = solve(ge_g.ld[ge.keep,ge.keep])
-	# cat( sum(ge.keep) , max(cond.z^2) , mean(cond.z^2) , '\n' )
+	cat( sum(ge.keep) , max(cond.z^2) , mean(cond.z^2) , '\n' )
 	prev.max = max(cond.z^2)
 	for ( i in 1:length(cond.z) ) {
-		if ( ge.keep[i] ) {
+		if ( ge.keep[i] || ge.drop[i] ) {
 			cond.z[i] = 0
 		} else if ( max(ge_g.ld[i,ge.keep]^2) > opt$max_r2 ) {
 			cond.z[i] = 0
@@ -297,7 +304,9 @@ while ( sum(cond.z^2 > zthresh^2) != 0 ) {
 	}
 	
 	# TODO: Better quantifying + reporting of overfit here.
-	if ( max(cond.z^2) > prev.max ) break()
+	# drop any genes for which the conditional association increased over the marginal
+	ge.drop[ cond.z^2 > prev.z^2 ] = T
+	cond.z[ cond.z^2 > prev.z^2 ] = 0
 }
 
 # FINAL FEATURE SELECTED ESTIMATES:
@@ -374,25 +383,60 @@ cat( "consolidated to ", length(cons.loc.starts) , " non-overlapping loci with "
 
 dinv = solve(ge_g.ld[joint.keep,joint.keep])
 
+if ( opt$report ) {
+	file.report = paste(opt$out,".report",sep='')
+	cat( "FILE" , "CHR" , "P0" , "P1" , "HIT.GENES" , "JOINT.GENES" , "BEST.TWAS.P" , "BEST.SNP.P" , "COND.SNP.P" , "VAR.EXP\n" , sep='\t' , file=file.report )
+}
+
 # iterate over loci
 for ( i in 1:length(cons.loc.starts) ) {
+
+	# get overlapping features
+	ge.keep = wgtlist$P0 < cons.loc.ends[i] & wgtlist$P1 > cons.loc.starts[i]
+	
+	# --- PERFORM FEATURE SELECTION IN THIS CLUMP
+	marg.z = ge_g.z
+	cond.z = ge_g.z
+	cond.z[ !ge.keep ] = 0
+	joint.keep = rep(F,length(ge_g.z))
+
+	while ( sum(cond.z^2 > zthresh^2) != 0 ) {
+		# add most conditionally significant feature 
+		joint.keep[ which.max(cond.z^2) ] = T
+		cur.dinv = solve(ge_g.ld[joint.keep,joint.keep])
+		cat( sum(joint.keep) , max(cond.z^2) , mean(cond.z[ cond.z!=0 ]^2) , '\n' )
+		for ( ii in which(cond.z != 0) ) {
+			if ( joint.keep[ii] ) {
+				cond.z[ii] = 0
+			} else if ( max(ge_g.ld[ii,joint.keep]^2) > opt$max_r2 ) {
+				cond.z[ii] = 0
+			} else {
+				# estimate conditional effect size
+				cur.b = marg.z[ii] - ge_g.ld[ii,joint.keep,drop=F] %*% (cur.dinv %*% marg.z[joint.keep,drop=F])
+				cur.b.var = ( 1 - ge_g.ld[ii,joint.keep,drop=F] %*% ( cur.dinv ) %*% t(ge_g.ld[ii,joint.keep,drop=F]) )
+				if ( cur.b.var < 0 ) cond.z[ii] = 0
+				else cond.z[ii] = cur.b / sqrt( cur.b.var )
+			}
+		}
+	}
+	cur.dinv = solve(ge_g.ld[joint.keep,joint.keep])
+	# ----
+
 	cur.keep = genos$bim[,4] > cons.loc.starts[i] & genos$bim[,4] < cons.loc.ends[i]
 	snp.z = sumstat$Z[ cur.keep ]
 	snp.ge.ld = t(genos$bed[,cur.keep]) %*% ge_g.matrix[,joint.keep] / ( N - 1 )
 
 	# TODO (optional) : impute any missing z-scores
-	snp.cond.b = snp.z - snp.ge.ld %*% (dinv %*% ge_g.z[joint.keep])
-	snp.cond.se = diag( sqrt( 1 - snp.ge.ld %*% ( dinv ) %*% t(snp.ge.ld) ) )
+	snp.cond.b = snp.z - snp.ge.ld %*% (cur.dinv %*% ge_g.z[joint.keep])
+	snp.cond.se = diag( sqrt( 1 - snp.ge.ld %*% ( cur.dinv ) %*% t(snp.ge.ld) ) )
 
 	# zero out any SNPs with > max_r2 LD to a gene
 	autocor = apply(snp.ge.ld^2,1,max,na.rm=T) > opt$max_r2
-	snp.cond.b[ autocor ] = NA
-	snp.cond.se[ autocor ] = NA
+	snp.cond.b[ autocor ] = 0
+	snp.cond.se[ autocor ] = 1
 	snp.cond.z = snp.cond.b / snp.cond.se
+	pv = 2*(pnorm( abs(snp.z) , lower.tail=F))
 
-	# get overlapping features
-	ge.keep = wgtlist$P0 < cons.loc.ends[i] & wgtlist$P1 > cons.loc.starts[i]
-	
 	# generate before/after manhattan plot
 	if ( opt$plot ) {
 		# get overlapping genes
@@ -402,7 +446,8 @@ for ( i in 1:length(cons.loc.starts) ) {
 		cur.glist = cur.glist[ is.na( m ), ]
 
 		tot = nrow(cur.glist) + sum(ge.keep)
-	
+		
+
 		pdf( file=paste(opt$out,".loc_",i,".pdf",sep='') , height = 2 + log(tot)/2 )
 		par( oma = c(5,4,0,0)+0.1 , mar=c(0,0,1,1)+0.1 , xpd=NA , las=1 )
 		
@@ -460,7 +505,7 @@ for ( i in 1:length(cons.loc.starts) ) {
 		clr.bg = c( clr.bg , clr.bg2 )	
 				
 		cur.glist = rbind( cur.glist , wgtlist[ ge.keep , c("CHR","P0","P1","ID") ] )	
-			
+		
 		ord = order(apply(cur.glist[,2:3],1,min))
 		cur.glist = cur.glist[ ord , ]	
 		clr.fg = clr.fg[ ord ]
@@ -523,7 +568,6 @@ for ( i in 1:length(cons.loc.starts) ) {
 			# --- DONE GENE PLOTTING
 
 			# Manhattan plots:
-			pv = 2*(pnorm( abs(snp.z) , lower.tail=F))
 			if ( opt$plot_eqtl && ( sum(ge.keep) == 1 || g.ctr > 1 ) ) {
 				plot( genos$bim[ cur.keep , 4 ] / 1e6 , -log10(pv) , pch=19 , cex=0.5 , col="gray" , xlab="" , ylab="-log10(P-value)" , bty="n" )				
 			} else {			
@@ -572,14 +616,33 @@ for ( i in 1:length(cons.loc.starts) ) {
 		dev.off()
 	}
 
+	pv.cond = 2*(pnorm( abs(snp.cond.z) , lower.tail=F))
+	
 	# print conditional Z-scores	
 	if ( opt$save_loci ) {
 		df.out = data.frame( "SNP" = genos$bim[cur.keep,2] , "POS" = genos$bim[cur.keep,4] , "GWAS.Z" = snp.z , "GWAS.P" = pv , "GWAS_cond.Z" = snp.cond.z , "GWAS_cond.P" = pv.cond )
 		write.table( format(df.out,digits=2) , quote=F , col.names=T , row.names=F , sep='\t' , file=paste(opt$out,".loc_",i,".cond",sep='') )
 	}
+	if ( opt$report ) {
+		df.out = data.frame( "SNP" = genos$bim[cur.keep,2] , "POS" = genos$bim[cur.keep,4] , "GWAS.LOGP" = -log10(pv) , "GWAS_cond.LOGP" = -log10(pv.cond) )
+		write.table( format(df.out,digits=2,trim=T) , quote=F , col.names=T , row.names=F , sep=',' , file=paste(opt$out,".loc_",i,".cond.csv",sep='') )
+	}
 	
 	cat( "locus " , i , " best GWAS Chisq\t" , max(snp.z^2,na.rm=T) , '\n' , sep='')
 	cat( "locus " , i , " best GWAS Chisq conditioned\t" , snp.cond.z[which.max(snp.z^2)]^2 , '\n' , sep='' )
 	cat( "locus " , i , " best conditioned Chisq\t" , max(snp.cond.z^2,na.rm=T) , '\n' , sep='' )
+	
+	if ( opt$report ) {
+		best.snp.chisq = max(snp.z^2,na.rm=T)
+		cond.snp.chisq = snp.cond.z[which.max(snp.z^2)]^2
+		cat( paste(opt$out,".loc_",i,sep='') , opt$chr , range( genos$bim[ cur.keep , 4 ] ) , length(unique(wgtlist$ID[ge.keep])) , sum( joint.keep[ ge.keep ] ) , min(wgtlist$TWAS.P[ ge.keep ],na.rm=T) , 2*pnorm(sqrt(best.snp.chisq), lower.tail=F) , 2*pnorm(sqrt(cond.snp.chisq), lower.tail=F) , 1 - cond.snp.chisq / best.snp.chisq , '\n' , sep='\t' , file=file.report , append=T )
+		
+		cur.wgt = wgtlist[ ge.keep , ]
+		cur.wgt$JOINT = joint.keep[ ge.keep ]
+		
+		# compute correlation of each gene to the top SNP
+		cur.wgt$TOP.SNP.COR = round(t(t( (genos$bed[,cur.keep])[,which.max(snp.z^2),drop=F] ) %*% ge_g.matrix[,ge.keep] / ( N - 1 )),2)
+		write.table( cur.wgt , quote=F , row.names=F , col.names=T , sep='\t' , file=paste(opt$out,".loc_",i,".genes",sep='')  )
+	}
 }
 # --- DONE CONDITIONAL ANALYSIS

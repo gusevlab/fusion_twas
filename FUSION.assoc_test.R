@@ -31,7 +31,9 @@ option_list = list(
   make_option("--coloc_P", action="store", default=NA, type='double',
               help="P-value below which to compute COLOC statistic [Giambartolomei et al PLoS Genet 2013]\nRequires coloc library installed and --GWASN flag. [default NA/off]"),
   make_option("--GWASN", action="store", default=NA, type='integer',
-              help="Total GWAS/sumstats sample size for inference of standard effect size.")
+              help="Total GWAS/sumstats sample size for inference of standard GWAS effect size."),
+  make_option("--PANELN", action="store", default=NA, type='character',
+              help="File listing sample size for each panel for inference of standard QTL effect size, cross-referenced against 'PANEL' column in weights file")      
 )
 
 opt = parse_args(OptionParser(option_list=option_list))
@@ -77,7 +79,7 @@ wgtlist = wgtlist[ as.character(wgtlist$CHR) == as.character(opt$chr) , ]
 chr = unique(wgtlist$CHR)
 
 N = nrow(wgtlist)
-out.tbl = data.frame( "FILE" = character(N) , "ID" = character(N) , "CHR" = numeric(N) , "P0" = numeric(N) , "P1" = numeric(N) ,"HSQ" = numeric(N) , "BEST.GWAS.ID" = character(N) , "BEST.GWAS.Z" = numeric(N) , "EQTL.ID" = character(N) , "EQTL.R2" = numeric(N) , "EQTL.Z" = numeric(N) , "EQTL.GWAS.Z" = numeric(N) , "NSNP" = numeric(N) , "NWGT" = numeric(N) , "MODEL" = character(N) , "MODELCV.R2" = numeric(N) , "MODELCV.PV" = numeric(N) , "TWAS.Z" = numeric(N) , "TWAS.P" = numeric(N) , stringsAsFactors=FALSE )
+out.tbl = data.frame( "PANEL" = character(N) , "FILE" = character(N) , "ID" = character(N) , "CHR" = numeric(N) , "P0" = numeric(N) , "P1" = numeric(N) ,"HSQ" = numeric(N) , "BEST.GWAS.ID" = character(N) , "BEST.GWAS.Z" = numeric(N) , "EQTL.ID" = character(N) , "EQTL.R2" = numeric(N) , "EQTL.Z" = numeric(N) , "EQTL.GWAS.Z" = numeric(N) , "NSNP" = numeric(N) , "NWGT" = numeric(N) , "MODEL" = character(N) , "MODELCV.R2" = numeric(N) , "MODELCV.PV" = numeric(N) , "TWAS.Z" = numeric(N) , "TWAS.P" = numeric(N) , stringsAsFactors=FALSE )
 
 if ( opt$jlim ) {
 	suppressMessages(library('jlimR'))
@@ -91,6 +93,16 @@ if ( !is.na(opt$coloc_P) ) {
 	if ( is.na(opt$GWASN) || opt$GWASN < 1 ) {
 		cat("ERROR : --GWASN flag required to be positive integer for COLOC analysis\n")
 		q()
+	}
+	if ( sum(names(wgtlist) == "N") == 0 ) {
+		if ( sum(names(wgtlist) == "PANEL") == 0 || is.na(opt$PANELN) ) {
+			cat("ERROR : 'N' field needed in weights file or 'PANEL' field and --PANELN flag required for COLOC analysis\n")
+			q()
+		} else { 
+			paneln = read.table(opt$PANELN,as.is=T,head=T,sep='\t')
+			m = match( wgtlist$PANEL , paneln$PANEL )
+			wgtlist$N = paneln$N[ m ]
+		}
 	}
 	suppressMessages(library('coloc'))
 	out.tbl$COLOC.PP0 = as.numeric(rep(NA,N))
@@ -150,7 +162,7 @@ for ( w in 1:nrow(wgtlist) ) {
 	m = match( snps[,2] , genos$bim[,2] )
 	m.keep = !is.na(m)
 	snps = snps[m.keep,]
-	wgt.matrix = wgt.matrix[m.keep,]
+	wgt.matrix = wgt.matrix[m.keep,,drop=F]
 	cur.genos = scale(genos$bed[,m[m.keep]])
 	cur.bim = genos$bim[m[m.keep],]
 	# Flip WEIGHTS for mismatching alleles
@@ -173,7 +185,7 @@ for ( w in 1:nrow(wgtlist) ) {
 		}	
 	} else {
 		mod.best = (which.max(cv.performance[1,]))
-		if ( names(mod.best) == "top1" ) {
+		if ( length(names(mod.best)) != 0 && names(mod.best) == "top1" ) {
 #			cat( "WARNING :",  unlist(wgtlist[w,]) , "top eQTL is the best predictor for this gene, continuing with 2nd-best model (top eQTL results will also be reported)\n" )
 			mod.best = names( which.max(cv.performance[1,colnames(cv.performance)!="top1"]) )
 			mod.best = which( colnames(cv.performance) == mod.best )
@@ -265,18 +277,21 @@ for ( w in 1:nrow(wgtlist) ) {
 	}
 
 	# populate the output
+	out.tbl$PANEL[w] = wgtlist$PANEL[w]
 	out.tbl$FILE[w] = wgt.file
 	out.tbl$CHR[w] = wgtlist$CHR[w]
 	out.tbl$P0[w] = wgtlist$P0[w]
 	out.tbl$P1[w] = wgtlist$P1[w]
 	out.tbl$ID[w] = wgtlist$ID[w]
-	out.tbl$HSQ[w] = hsq[1]
+	if ( exists("hsq") ) {
+		out.tbl$HSQ[w] = hsq[1]
+	}
 	out.tbl$MODEL[w] = colnames( cv.performance )[ mod.best ]
 	out.tbl$MODELCV.R2[w] = cv.performance[1,mod.best]
 	out.tbl$MODELCV.PV[w] = cv.performance[2,mod.best]
 
 	eqtlmod = colnames(wgt.matrix) == "top1"
-	if ( cur.FAIL || length(eqtlmod) == 0 ) {
+	if ( cur.FAIL || sum(eqtlmod) == 0 ) {
 		out.tbl$EQTL.ID[w] = NA
 		out.tbl$EQTL.R2[w] = NA
 		out.tbl$EQTL.Z[w] =  NA
@@ -328,7 +343,7 @@ for ( w in 1:nrow(wgtlist) ) {
 	}
 
 	# perform COLOC test
-	if ( !is.na(opt$coloc_P) && !is.na(out.tbl$TWAS.Z[w]) && out.tbl$TWAS.P[w] < opt$coloc_P ) {
+	if ( !is.na(opt$coloc_P) && !is.na(out.tbl$TWAS.Z[w]) && out.tbl$TWAS.P[w] < opt$coloc_P && !is.na(wgtlist$N[w]) ) {
 		b1 = wgt.matrix[,eqtlmod] / sqrt(wgtlist$N[w])
 		b2 = cur.Z / sqrt(opt$GWASN)
 
