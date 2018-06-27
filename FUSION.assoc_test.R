@@ -79,7 +79,7 @@ wgtlist = wgtlist[ as.character(wgtlist$CHR) == as.character(opt$chr) , ]
 chr = unique(wgtlist$CHR)
 
 N = nrow(wgtlist)
-out.tbl = data.frame( "PANEL" = character(N) , "FILE" = character(N) , "ID" = character(N) , "CHR" = numeric(N) , "P0" = numeric(N) , "P1" = numeric(N) ,"HSQ" = numeric(N) , "BEST.GWAS.ID" = character(N) , "BEST.GWAS.Z" = numeric(N) , "EQTL.ID" = character(N) , "EQTL.R2" = numeric(N) , "EQTL.Z" = numeric(N) , "EQTL.GWAS.Z" = numeric(N) , "NSNP" = numeric(N) , "NWGT" = numeric(N) , "MODEL" = character(N) , "MODELCV.R2" = numeric(N) , "MODELCV.PV" = numeric(N) , "TWAS.Z" = numeric(N) , "TWAS.P" = numeric(N) , stringsAsFactors=FALSE )
+out.tbl = data.frame( "PANEL" = rep(NA,N) , "FILE" = character(N) , "ID" = character(N) , "CHR" = numeric(N) , "P0" = numeric(N) , "P1" = numeric(N) ,"HSQ" = numeric(N) , "BEST.GWAS.ID" = character(N) , "BEST.GWAS.Z" = numeric(N) , "EQTL.ID" = character(N) , "EQTL.R2" = numeric(N) , "EQTL.Z" = numeric(N) , "EQTL.GWAS.Z" = numeric(N) , "NSNP" = numeric(N) , "NWGT" = numeric(N) , "MODEL" = character(N) , "MODELCV.R2" = numeric(N) , "MODELCV.PV" = numeric(N) , "TWAS.Z" = numeric(N) , "TWAS.P" = numeric(N) , stringsAsFactors=FALSE )
 
 if ( opt$jlim ) {
 	suppressMessages(library('jlimR'))
@@ -96,7 +96,7 @@ if ( !is.na(opt$coloc_P) ) {
 	}
 	if ( sum(names(wgtlist) == "N") == 0 ) {
 		if ( sum(names(wgtlist) == "PANEL") == 0 || is.na(opt$PANELN) ) {
-			cat("ERROR : 'N' field needed in weights file or 'PANEL' field and --PANELN flag required for COLOC analysis\n")
+			cat("ERROR : 'N' field needed in weights file or 'PANEL' column and --PANELN flag required for COLOC analysis\n")
 			q()
 		} else { 
 			paneln = read.table(opt$PANELN,as.is=T,head=T,sep='\t')
@@ -277,7 +277,7 @@ for ( w in 1:nrow(wgtlist) ) {
 	}
 
 	# populate the output
-	out.tbl$PANEL[w] = wgtlist$PANEL[w]
+	if ( sum(names(wgtlist) == "PANEL") == 1 ) out.tbl$PANEL[w] = wgtlist$PANEL[w]
 	out.tbl$FILE[w] = wgt.file
 	out.tbl$CHR[w] = wgtlist$CHR[w]
 	out.tbl$P0[w] = wgtlist$P0[w]
