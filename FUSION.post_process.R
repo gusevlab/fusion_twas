@@ -77,7 +77,9 @@ option_list = list(
   make_option("--save_loci", action="store_true", default=FALSE,
               help="Save conditioned GWAS results for each locus [default: %default]"),
   make_option("--chr", action="store", default=NA, type='character',
-              help="Chromosome to analyze, currently only single chromosome analyses are performed [required]")                   
+              help="Chromosome to analyze, currently only single chromosome analyses are performed [required]"),
+  make_option("--verbose", action="store", default=1, type="integer",
+              help="How much chatter to print: 0=nothing; 1=minimal; 2=all [default: %default]")                              
 )
 
 opt = parse_args(OptionParser(option_list=option_list))
@@ -257,6 +259,7 @@ if ( opt$ldsc ) {
 ge_g.ld = cor(ge_g.matrix)
 ge_g.z = wgtlist$TWAS.Z
 zthresh = qnorm( 0.05 / nrow( wgtlist ) / 2,lower.tail=F)
+if( opt$verbose > 1 ) cat( nrow( wgtlist ) , " weights considered, a weight must have Z^2 > ", zthresh^2 , " to be retained in the model\n" , sep='' , file=stderr() ) 
 
 if ( opt$plot_corr ) {
 	rownames(ge_g.ld) = wgtlist$ID
@@ -286,28 +289,36 @@ while ( sum(cond.z^2 > zthresh^2) != 0 ) {
 
 	# add most conditionally significant feature 
 	ge.keep[ which.max(cond.z^2) ] = T
+	if( opt$verbose > 1 ) cat( wgtlist$FILE[ which.max(cond.z^2) ] , " added to model with conditional Z-score of ", cond.z , "\n" , sep='' , file=stderr() ) 
+
 	cur.dinv = solve(ge_g.ld[ge.keep,ge.keep])
-	cat( sum(ge.keep) , max(cond.z^2) , mean(cond.z^2) , '\n' )
 	prev.max = max(cond.z^2)
 	for ( i in 1:length(cond.z) ) {
 		if ( ge.keep[i] || ge.drop[i] ) {
 			cond.z[i] = 0
 		} else if ( max(ge_g.ld[i,ge.keep]^2) > opt$max_r2 ) {
 			cond.z[i] = 0
+			if( opt$verbose > 1 ) cat( wgtlist$FILE[ i ] , " dropped from the model due to correlation higher than --max_r2 to other genes in the model\n" , sep='' , file=stderr() ) 
 		} else {
 			# estimate conditional effect size
 		    cur.b = ge_g.z[i] - ge_g.ld[i,ge.keep,drop=F] %*% (cur.dinv %*% ge_g.z[ge.keep,drop=F])
 			cur.b.var = ( 1 - ge_g.ld[i,ge.keep,drop=F] %*% ( cur.dinv ) %*% t(ge_g.ld[i,ge.keep,drop=F]) )
-			if ( cur.b.var < 0 ) cond.z[i] = 0
-			else cond.z[i] = cur.b / sqrt( cur.b.var )
+			if ( cur.b.var < 0 ) {
+				cond.z[i] = 0
+				if( opt$verbose > 1 ) cat( wgtlist$FILE[ i ] , " dropped from the model due to misspecified correlation with other genes\n" , sep='' , file=stderr() ) 
+			} else cond.z[i] = cur.b / sqrt( cur.b.var )
 		}
 	}
 	
 	# TODO: Better quantifying + reporting of overfit here.
 	# drop any genes for which the conditional association increased over the marginal
-	ge.drop[ cond.z^2 > prev.z^2 ] = T
-	cond.z[ cond.z^2 > prev.z^2 ] = 0
+	if ( sum(cond.z^2 > prev.z^2) != 0 ) {
+		ge.drop[ cond.z^2 > prev.z^2 ] = T
+		cond.z[ cond.z^2 > prev.z^2 ] = 0
+		if( opt$verbose > 1 ) cat( unlist( wgtlist$FILE[ cond.z^2 > prev.z^2 ] ) , " became more significant after conditional analysis, this is usually a sign of poor LD modelling and they are dropped from the model\n" , sep='' , file=stderr() ) 
+	}
 }
+if( opt$verbose > 1 ) cat( "final best conditional Z^2 = " , max(cond.z^2) , "\n" , sep='' , file=stderr() ) 
 
 # FINAL FEATURE SELECTED ESTIMATES:
 joint.keep = ge.keep
