@@ -53,7 +53,9 @@ option_list = list(
   make_option("--min_r2", action="store", default=0.05, type='double',
               help="Features with r^2 less than this will be considered independent [default: %default]"),
   make_option("--locus_win", action="store", default=100e3, type='integer',
-              help="How much to expand each feature (in bp) to define contiguous loci [default: %default]"),       
+              help="How much to expand each feature (in bp) to define contiguous loci [default: %default]"), 
+  make_option("--max_cz_increase", action="store", default=1.96, type='double',
+              help="Maximum allowed increase in conditional Z-score (can indicate LD mismatch / complex locus) [default: %default]"),                     
   make_option("--plot", action="store_true", default=FALSE,
               help="Generate pdf plots for each locus [default: OFF]"),
   make_option("--plot_legend", action="store", default=NA, type='character',
@@ -86,7 +88,8 @@ opt = parse_args(OptionParser(option_list=option_list))
 options( digits = 3 )
 
 # --- TODO
-# Allow list of sumstats files from multiple GWAS panels
+# Better computation of clumps
+# Perform feature selection only within each clump and print separate outputs
 # ---
 
 chr = opt$chr
@@ -279,20 +282,17 @@ if ( opt$plot_corr ) {
 ge_g.ld[ ge_g.ld^2 < opt$min_r2 ] = 0
 
 
-# --- PERFORM FEATURE SELECTION
+# --- PERFORM FEATURE SELECTION ACROSS ALL GENES
 cond.z = ge_g.z
 ge.keep = rep(F,length(ge_g.z))
 ge.drop = rep(F,length(ge_g.z))
 
 while ( sum(cond.z^2 > zthresh^2) != 0 ) {
-	prev.z = cond.z
-
 	# add most conditionally significant feature 
 	ge.keep[ which.max(cond.z^2) ] = T
-	if( opt$verbose > 1 ) cat( wgtlist$FILE[ which.max(cond.z^2) ] , " added to model with conditional Z-score of ", cond.z , "\n" , sep='' , file=stderr() ) 
+	if( opt$verbose > 1 ) cat( wgtlist$FILE[ which.max(cond.z^2) ] , " added to model with conditional Z-score of ", cond.z[which.max(cond.z^2)] , "\n" , sep='' , file=stderr() ) 
 
 	cur.dinv = solve(ge_g.ld[ge.keep,ge.keep])
-	prev.max = max(cond.z^2)
 	for ( i in 1:length(cond.z) ) {
 		if ( ge.keep[i] || ge.drop[i] ) {
 			cond.z[i] = 0
@@ -310,12 +310,12 @@ while ( sum(cond.z^2 > zthresh^2) != 0 ) {
 		}
 	}
 	
-	# TODO: Better quantifying + reporting of overfit here.
 	# drop any genes for which the conditional association increased over the marginal
-	if ( sum(cond.z^2 > prev.z^2) != 0 ) {
-		ge.drop[ cond.z^2 > prev.z^2 ] = T
-		cond.z[ cond.z^2 > prev.z^2 ] = 0
-		if( opt$verbose > 1 ) cat( unlist( wgtlist$FILE[ cond.z^2 > prev.z^2 ] ) , " became more significant after conditional analysis, this is usually a sign of poor LD modelling and they are dropped from the model\n" , sep='' , file=stderr() ) 
+	cur.unstable = cond.z^2 > ge_g.z^2 + (opt$max_cz_increase)^2
+	if ( sum(cur.unstable) != 0 ) {
+		if( opt$verbose > 1 ) cat( unlist( wgtlist$FILE[ cur.unstable ] ) , " became more significant after conditional analysis and are dropped from the model (this is usually a sign of LD mismatch or a complex locus)\n" , sep='' , file=stderr() ) 
+		ge.drop[ cur.unstable ] = T
+		cond.z[ cur.unstable ] = 0
 	}
 }
 if( opt$verbose > 1 ) cat( "final best conditional Z^2 = " , max(cond.z^2) , "\n" , sep='' , file=stderr() ) 
@@ -375,7 +375,7 @@ if ( runs$val[1] ) {
 }
 loc.starts = genos$bim[loc.starts,4] - opt$locus_win
 loc.ends = genos$bim[loc.ends,4] + opt$locus_win
-cat( length(loc.starts) , " strictly non-overlapping loci\n" , sep='' )
+if( opt$verbose > 0 ) cat( length(loc.starts) , " strictly non-overlapping loci\n" , sep='' , file=stderr() )
 
 # Consolidate overlapping loci
 cons.loc.starts = loc.starts[1]
@@ -390,7 +390,7 @@ for ( i in 2:length(loc.starts) ) {
 		loc.ctr = loc.ctr+1
 	}
 }
-cat( "consolidated to ", length(cons.loc.starts) , " non-overlapping loci with ", opt$locus_win , " bp buffer\n" , sep='' )
+if( opt$verbose > 0 ) cat( "consolidated to ", length(cons.loc.starts) , " non-overlapping loci with ", opt$locus_win , " bp buffer\n" , sep='' , file=stderr() )
 
 dinv = solve(ge_g.ld[joint.keep,joint.keep])
 
@@ -415,7 +415,6 @@ for ( i in 1:length(cons.loc.starts) ) {
 		# add most conditionally significant feature 
 		joint.keep[ which.max(cond.z^2) ] = T
 		cur.dinv = solve(ge_g.ld[joint.keep,joint.keep])
-		cat( sum(joint.keep) , max(cond.z^2) , mean(cond.z[ cond.z!=0 ]^2) , '\n' )
 		for ( ii in which(cond.z != 0) ) {
 			if ( joint.keep[ii] ) {
 				cond.z[ii] = 0
