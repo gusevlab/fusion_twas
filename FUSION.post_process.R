@@ -429,8 +429,6 @@ for ( i in 2:length(loc.starts) ) {
 
 if( opt$verbose > 0 ) cat( "consolidated to ", length(cons.loc.starts) , " non-overlapping loci with ", opt$locus_win , " bp buffer\n" , sep='' , file=stderr() )
 
-dinv = solve(ge_g.ld[joint.keep,joint.keep])
-
 if ( opt$report ) {
 	file.report = paste(opt$out,".report",sep='')
 	cat( "FILE" , "CHR" , "P0" , "P1" , "HIT.GENES" , "JOINT.GENES" , "BEST.TWAS.P" , "BEST.SNP.P" , "COND.SNP.P" , "VAR.EXP\n" , sep='\t' , file=file.report )
