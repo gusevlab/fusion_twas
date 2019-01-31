@@ -23,6 +23,8 @@ option_list = list(
               help="Path to plink executable [%default]"),
   make_option("--covar", action="store", default=NA, type='character',
               help="Path to quantitative covariates (PLINK format) [optional]"),
+  make_option("--resid", action="store_true", default=FALSE,
+              help="Also regress the covariates out of the genotypes [default: %default]"),              
   make_option("--hsq_p", action="store", default=0.01, type='double',
               help="Minimum heritability p-value for which to compute weights [default: %default]"),
   make_option("--hsq_set", action="store", default=NA, type='double',
@@ -194,7 +196,7 @@ if ( !is.na(opt$covar) ) {
 	pheno[,3] = scale(reg$resid)
 	raw.pheno.file = pheno.file
 	pheno.file = paste(pheno.file,".resid",sep='')
-	write.table(pheno,quote=F,row.names=F,col.names=F,file=pheno.file)	
+	write.table(pheno,quote=F,row.names=F,col.names=F,file=pheno.file)
 }
 
 geno.file = opt$tmp
@@ -259,6 +261,15 @@ nasnps = apply( is.na(genos$bed) , 2 , sum )
 if ( sum(nasnps) != 0 ) {
 	cat( "WARNING :",sum(nasnps != 0),"SNPs could not be scaled and were zeroed out, make sure all SNPs are polymorphic\n" , file=stderr())
 	genos$bed[,nasnps != 0] = 0
+}
+
+# regress covariates out of the genotypes as well (this is more accurate but slower)
+if ( !is.na(opt$covar) && opt$resid ) {
+	if ( opt$verbose >= 1 ) cat("regressing covariates out of the genotypes\n")
+	for ( i in 1:ncol(genos$bed) ) {
+		genos$bed[,i] = summary(lm( genos$bed[,i] ~ as.matrix(covar[,3:ncol(covar)]) ))$resid
+	}
+	genos$bed = scale(genos$bed)
 }
 
 N.tot = nrow(genos$bed)
