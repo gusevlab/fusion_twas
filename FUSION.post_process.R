@@ -86,7 +86,7 @@ option_list = list(
   make_option("--chr", action="store", default=NA, type='character',
               help="Chromosome to analyze, currently only single chromosome analyses are performed [required]"),
   make_option("--verbose", action="store", default=1, type="integer",
-              help="How much chatter to print: 0=nothing; 1=minimal; 2=all [default: %default]")  
+              help="How much chatter to print: 0=nothing; 1=minimal; 2=all [default: %default]"),  
   make_option("--zthresh", action="store", default=FALSE, type='double',
               help="Z-score threshold for performing summary conditional analysis [default: %default]")                            
 )
