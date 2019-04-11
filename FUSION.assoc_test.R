@@ -298,7 +298,7 @@ for ( w in 1:nrow(wgtlist) ) {
 		out.tbl$EQTL.GWAS.Z[w] = NA
 	} else {
 		topeqtl = which.max( wgt.matrix[,eqtlmod]^2 )
-		out.tbl$EQTL.ID[w] = names( topeqtl )
+		out.tbl$EQTL.ID[w] = rownames(wgt.matrix)[topeqtl]
 		out.tbl$EQTL.R2[w] = cv.performance[1,eqtlmod]
 		out.tbl$EQTL.Z[w] = wgt.matrix[ topeqtl , eqtlmod ]
 		out.tbl$EQTL.GWAS.Z[w] = cur.Z[ topeqtl ]
