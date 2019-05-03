@@ -333,9 +333,14 @@ for ( i in 1:opt$crossval ) {
 
 # compute rsq + P-value for each model
 for ( mod in 1:M ) {
-	reg = summary(lm( cv.all[,3] ~ cv.calls[,mod] ))
-	cv.performance[ 1, mod ] = reg$adj.r.sq
-	cv.performance[ 2, mod ] = reg$coef[2,4]
+	if ( !is.na(sd(cv.calls[,mod])) && sd(cv.calls[,mod]) != 0 ) {
+		reg = summary(lm( cv.all[,3] ~ cv.calls[,mod] ))
+		cv.performance[ 1, mod ] = reg$adj.r.sq
+		cv.performance[ 2, mod ] = reg$coef[2,4]
+	} else {
+		cv.performance[ 1, mod ] = NA
+		cv.performance[ 2, mod ] = NA
+	}
 }
 if ( opt$verbose >= 1 ) write.table(cv.performance,quote=F,sep='\t')
 }
