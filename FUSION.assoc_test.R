@@ -371,6 +371,10 @@ cat("Or consider pre-imputing your summary statistics to the LDREF markers using
 
 # WRITE MHC TO SEPARATE FILE
 mhc = out.tbl$CHR == 6 & out.tbl$P0 > 26e6 & out.tbl$P1 < 34e6
+# parse positions to text to avoid rounding
+out.tbl$P0 = toString( out.tbl$P0 )
+out.tbl$P1 = toString( out.tbl$P1 )
+
 if ( sum( mhc ) > 0 ) {
 	cat("Results in the MHC are written to",paste(opt$out,".MHC",sep=''),", evaluate with caution due to complex LD structure\n")
 	write.table( format( out.tbl[mhc,] , digits=3 ) , quote=F , row.names=F , sep='\t' , file=paste(opt$out,".MHC",sep='') )
