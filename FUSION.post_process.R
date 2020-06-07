@@ -79,6 +79,8 @@ option_list = list(
               help="Perform the omnibus test for genes (ID field) with multiple models (FILE field). NOTE: This disables all other tests."),
   make_option("--omnibus_corr", action="store", default=NA, type='character',
               help="Only print the pairwise correlations between reference panels for the specified model [options: top1,blup,bslmm,enet,lasso or best]"),
+  make_option("--eqtl_model", action="store", default="top1", type='character',
+              help="Name of the predictive for which weights should be used for marginal eQTL plotting (experimental) [default: %default]"),	
   make_option("--ldsc", action="store_true", default=FALSE,
               help="Compute LD-scores across all features. NOTE: This disables all other tests."),             
   make_option("--save_loci", action="store_true", default=FALSE,
@@ -254,7 +256,7 @@ for ( i in 1:nrow(wgtlist) ) {
 	wgt.matrix[qc$flip,] = -1 * wgt.matrix[qc$flip,]
 	if ( opt$plot_eqtl ) {
 		eqtl.pos[[i]] = snps[,4]
-		eqtl.z[[i]] = wgt.matrix[ , which(colnames(wgt.matrix) == "top1") ]
+		eqtl.z[[i]] = wgt.matrix[ , which(colnames(wgt.matrix) == opt$eqtl_model) ]
 	}
 	
 	# Predict into reference
