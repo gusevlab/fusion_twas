@@ -79,7 +79,7 @@ wgtlist = wgtlist[ as.character(wgtlist$CHR) == as.character(opt$chr) , ]
 chr = unique(wgtlist$CHR)
 
 N = nrow(wgtlist)
-out.tbl = data.frame( "PANEL" = rep(NA,N) , "FILE" = character(N) , "ID" = character(N) , "CHR" = numeric(N) , "P0" = numeric(N) , "P1" = numeric(N) ,"HSQ" = numeric(N) , "BEST.GWAS.ID" = character(N) , "BEST.GWAS.Z" = numeric(N) , "EQTL.ID" = character(N) , "EQTL.R2" = numeric(N) , "EQTL.Z" = numeric(N) , "EQTL.GWAS.Z" = numeric(N) , "NSNP" = numeric(N) , "NWGT" = numeric(N) , "MODEL" = character(N) , "MODELCV.R2" = numeric(N) , "MODELCV.PV" = numeric(N) , "TWAS.Z" = numeric(N) , "TWAS.P" = numeric(N) , stringsAsFactors=FALSE )
+out.tbl = data.frame( "PANEL" = rep(NA,N) , "FILE" = character(N) , "ID" = character(N) , "CHR" = numeric(N) , "P0" = character(N) , "P1" = character(N) ,"HSQ" = numeric(N) , "BEST.GWAS.ID" = character(N) , "BEST.GWAS.Z" = numeric(N) , "EQTL.ID" = character(N) , "EQTL.R2" = numeric(N) , "EQTL.Z" = numeric(N) , "EQTL.GWAS.Z" = numeric(N) , "NSNP" = numeric(N) , "NWGT" = numeric(N) , "MODEL" = character(N) , "MODELCV.R2" = character(N) , "MODELCV.PV" = character(N) , "TWAS.Z" = numeric(N) , "TWAS.P" = numeric(N) , stringsAsFactors=FALSE )
 
 if ( opt$jlim ) {
 	suppressMessages(library('jlimR'))
@@ -168,7 +168,6 @@ for ( w in 1:nrow(wgtlist) ) {
 	# Flip WEIGHTS for mismatching alleles
 	qc = allele.qc( snps[,5] , snps[,6] , cur.bim[,5] , cur.bim[,6] )
 	wgt.matrix[qc$flip,] = -1 * wgt.matrix[qc$flip,]
-	rm(snps)
 
 	cur.FAIL = FALSE
 
@@ -176,6 +175,11 @@ for ( w in 1:nrow(wgtlist) ) {
 	m = match(cur.bim[,2] , sumstat$SNP)
 	cur.Z = sumstat$Z[m]
 
+	# which rows have rsq
+	row.rsq = grep( "rsq" , rownames(cv.performance) )
+	# which rows have p-values
+	row.pval = grep( "pval" , rownames(cv.performance) )	
+	
 	# Identify the best model
 	if ( !is.na(opt$force_model) ) {
 		mod.best = which( colnames(wgt.matrix) == opt$force_model )
@@ -184,18 +188,22 @@ for ( w in 1:nrow(wgtlist) ) {
 			cur.FAIL = TRUE
 		}	
 	} else {
-		mod.best = (which.max(cv.performance[1,]))
-		if ( length(names(mod.best)) != 0 && names(mod.best) == "top1" ) {
-#			cat( "WARNING :",  unlist(wgtlist[w,]) , "top eQTL is the best predictor for this gene, continuing with 2nd-best model (top eQTL results will also be reported)\n" )
-			mod.best = names( which.max(cv.performance[1,colnames(cv.performance)!="top1"]) )
-			mod.best = which( colnames(cv.performance) == mod.best )
-		}
+		# get the most significant model
+		mod.best = which.min(apply(cv.performance[row.pval,,drop=F],2,min,na.rm=T))
 	}
-	
+	if ( length(mod.best) == 0 ) {
+		cat( "WARNING : " , unlist(wgtlist[w,]) , " did not have a predictive model ... skipping entirely\n" )
+		FAIL.ctr = FAIL.ctr + 1
+		next
+	}
+
 	if ( sum(wgt.matrix[, mod.best] != 0) == 0 ) {
 		cat( "WARNING : " , unlist(wgtlist[w,]) , names(cv.performance)[ mod.best ] , "had", length(cur.Z) , "overlapping SNPs, but none with non-zero expression weights, try more SNPS or a different model\n")
 		cur.FAIL = TRUE
 	}
+
+	# if this is a top1 model, clear out all the other weights
+	if ( substr( (colnames(cv.performance))[ mod.best ],1,4) == "top1" ) wgt.matrix[ -which.max(wgt.matrix[,mod.best]^2)  , mod.best] = 0
 
 	# Compute LD matrix
 	if ( length(cur.Z) == 0 ) {
@@ -287,8 +295,8 @@ for ( w in 1:nrow(wgtlist) ) {
 		out.tbl$HSQ[w] = hsq[1]
 	}
 	out.tbl$MODEL[w] = colnames( cv.performance )[ mod.best ]
-	out.tbl$MODELCV.R2[w] = cv.performance[1,mod.best]
-	out.tbl$MODELCV.PV[w] = cv.performance[2,mod.best]
+	out.tbl$MODELCV.R2[w] = paste(format(cv.performance[row.rsq,mod.best],digits=2,trim=T),collapse=',')
+	out.tbl$MODELCV.PV[w] = paste(format(cv.performance[row.pval,mod.best],digits=2,trim=T),collapse=',')
 
 	eqtlmod = colnames(wgt.matrix) == "top1"
 	if ( cur.FAIL || sum(eqtlmod) == 0 ) {
@@ -298,7 +306,7 @@ for ( w in 1:nrow(wgtlist) ) {
 		out.tbl$EQTL.GWAS.Z[w] = NA
 	} else {
 		topeqtl = which.max( wgt.matrix[,eqtlmod]^2 )
-		out.tbl$EQTL.ID[w] = rownames(wgt.matrix)[topeqtl]
+		out.tbl$EQTL.ID[w] = names( topeqtl )
 		out.tbl$EQTL.R2[w] = cv.performance[1,eqtlmod]
 		out.tbl$EQTL.Z[w] = wgt.matrix[ topeqtl , eqtlmod ]
 		out.tbl$EQTL.GWAS.Z[w] = cur.Z[ topeqtl ]
@@ -306,7 +314,7 @@ for ( w in 1:nrow(wgtlist) ) {
 		# write CAVIAR inputs
 		if( opt$caviar ) {
 			cur.Z = as.matrix(cur.Z,ncol=1)
-			rownames(cur.Z) = rownames(wgt.matrix)
+			rownames(cur.Z) = snps[,2]
 			cav.out = paste( opt$out , wgtlist$ID[w] , "CAVIAR" , sep='.' )
 			write.table( format(cur.LD,digits=3) , quote=F , col.names=F , row.names=F , file = paste( cav.out , ".LD" , sep='' ) )
 			write.table( format(wgt.matrix[,eqtlmod],digits=3) , quote=F , col.names=F , sep='\t' , file = paste( cav.out , ".EQTL.Z" , sep='') )
@@ -326,7 +334,7 @@ for ( w in 1:nrow(wgtlist) ) {
 	
 	topgwas = which.max( cur.Z^2 )
 	if ( !cur.FAIL && length(topgwas) != 0 && !is.na(topgwas) ) {
-		out.tbl$BEST.GWAS.ID[w] = rownames(wgt.matrix)[ topgwas ]
+		out.tbl$BEST.GWAS.ID[w] = snps[ topgwas , 2 ]
 		out.tbl$BEST.GWAS.Z[w] = cur.Z[ topgwas ]
 	} else {
 		out.tbl$BEST.GWAS.ID[w] = NA
@@ -364,14 +372,14 @@ cat("Analysis completed.\n")
 cat("NOTE:",FAIL.ctr,"/",nrow(wgtlist),"genes were skipped\n")
 if ( FAIL.ctr / nrow(wgtlist) > 0.1 ) {
 cat("If a large number of genes were skipped, verify that your GWAS Z-scores, expression weights, and LDREF data use the same SNPs (or nearly)\n")
-cat("Or consider pre-imputing your summary statistics to the LDREF markers using summary-imputation software such as [http://bogdan.bioinformatics.ucla.edu/software/impg/]\n")
+cat("Or consider pre-imputing your summary statistics to the LDREF markers using summary-imputation software such as [https://github.com/bogdanlab/fizi]\n")
 }
 # compute p-value
 #out.tbl$TWAS.P = 2*(pnorm( abs(out.tbl$TWAS.Z) , lower.tail=F))
 
 # WRITE MHC TO SEPARATE FILE
 mhc = out.tbl$CHR == 6 & out.tbl$P0 > 26e6 & out.tbl$P1 < 34e6
-# parse positions to text to avoid rounding
+
 out.tbl$P0 = apply( as.matrix(out.tbl$P0) , 1 , toString )
 out.tbl$P1 = apply( as.matrix(out.tbl$P1) , 1 , toString )
 
