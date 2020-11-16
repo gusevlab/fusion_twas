@@ -299,13 +299,14 @@ for ( w in 1:nrow(wgtlist) ) {
 	out.tbl$MODELCV.PV[w] = paste(format(cv.performance[row.pval,mod.best],digits=2,trim=T),collapse=',')
 
 	eqtlmod = colnames(wgt.matrix) == "top1"
-	if ( cur.FAIL || sum(eqtlmod) == 0 ) {
+	topeqtl = which.max( wgt.matrix[,eqtlmod]^2 )
+	
+	if ( cur.FAIL || sum(eqtlmod) == 0 || length(topeqtl) == 0 || is.na(topeqtl) ) {
 		out.tbl$EQTL.ID[w] = NA
 		out.tbl$EQTL.R2[w] = NA
 		out.tbl$EQTL.Z[w] =  NA
 		out.tbl$EQTL.GWAS.Z[w] = NA
 	} else {
-		topeqtl = which.max( wgt.matrix[,eqtlmod]^2 )
 		out.tbl$EQTL.ID[w] = names( topeqtl )
 		out.tbl$EQTL.R2[w] = cv.performance[1,eqtlmod]
 		out.tbl$EQTL.Z[w] = wgt.matrix[ topeqtl , eqtlmod ]
