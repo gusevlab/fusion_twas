@@ -12,6 +12,8 @@ LDREF="<PATH TO LDREF>"
 # PATH TO GEUVADIS GENE EXPRESSION MATRIX:
 PRE_GEXP="GD462.GeneQuantRPKM.50FN.samplename.resk10.txt"
 # GEUVADIS DATA WAS DOWNLOADED FROM https://www.ebi.ac.uk/arrayexpress/experiments/E-GEUV-1/files/analysis_results/
+# GENERATE ID FILE
+cat $PRE_GEXP | head -n1 | tr '\t' '\n' | tail -n+5 | awk '{ print $1,$1 }' > ${PRE_GEXP}.ID
 
 # PATH TO PREFIX FOR GEUVADIS GENOTYPES SPLIT BY CHROMOSOME
 # SUBSAMPLE THESE TO THE LDREF SNPS FOR EFFICIENCY
