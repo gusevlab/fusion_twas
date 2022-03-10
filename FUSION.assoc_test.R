@@ -379,7 +379,7 @@ cat("Or consider pre-imputing your summary statistics to the LDREF markers using
 #out.tbl$TWAS.P = 2*(pnorm( abs(out.tbl$TWAS.Z) , lower.tail=F))
 
 # WRITE MHC TO SEPARATE FILE
-mhc = out.tbl$CHR == 6 & out.tbl$P0 > 26e6 & out.tbl$P1 < 34e6
+mhc = as.numeric(out.tbl$CHR) == 6 & as.numeric(out.tbl$P0) > 26e6 & as.numeric(out.tbl$P1) < 34e6
 
 out.tbl$P0 = apply( as.matrix(out.tbl$P0) , 1 , toString )
 out.tbl$P1 = apply( as.matrix(out.tbl$P1) , 1 , toString )
