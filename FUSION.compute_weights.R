@@ -54,6 +54,11 @@ opt = parse_args(OptionParser(option_list=option_list))
 models = unique( c(unlist(strsplit(opt$models,',')),"top1") )
 M = length(models)
 
+if ( ! all(models %in% c('blup', 'lasso', 'top1', 'enet', 'bslmm')) ) {
+	cat( "ERROR: --models flag included invalid models\n" , sep='' , file=stderr() )
+	q()
+}
+
 if ( opt$verbose == 2 ) {
   SYS_PRINT = F
 } else {
