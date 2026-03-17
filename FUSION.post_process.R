@@ -1,6 +1,11 @@
-suppressMessages(library('plink2R'))
+suppressMessages(library("here"))
 suppressMessages(library("optparse"))
-suppressMessages(library("RColorBrewer"))
+source(here("utils","plink_utils.R"))
+
+panel_colors = c(
+	"#8DD3C7", "#FFFFB3", "#BEBADA", "#FB8072", "#80B1D3", "#FDB462",
+	"#B3DE69", "#FCCDE5", "#D9D9D9", "#BC80BD", "#CCEBC5", "#FFED6F"
+)
 
 allele.qc = function(a1,a2,ref1,ref2) {
 	a1 = toupper(a1)
@@ -38,9 +43,6 @@ initial.options <- commandArgs(trailingOnly = FALSE)
 file.arg.name <- "--file="
 script.name <- sub(file.arg.name, "", initial.options[grep(file.arg.name, initial.options)])
 script.dir <- dirname(script.name)
-
-# Perform permutation test
-# opt$perm = FALSE
 
 option_list = list(
   make_option("--input", action="store", default=NA, type='character',
@@ -113,7 +115,7 @@ wgtlist = wgtlist[ wgtlist$CHR == chr & wgtlist$TWAS.P < opt$minp_input & !is.na
 
 # load in genotype files by chromosome, restrict to matching SNPs and combine
 genos = read_plink(paste(opt$ref_ld_chr,chr,sep=''),impute="avg")
-MAFS = apply(genos$bed,2,mean)
+MAFS = apply(genos$bed,2,mean) / 2
 genos$bed = scale(genos$bed)
 N = nrow(genos$fam)
 
@@ -525,7 +527,7 @@ for ( i in 1:length(cons.loc.starts) ) {
 				ref.names = unlist(lapply(strsplit(dirname(wgtlist$FILE[ ge.keep ]),"/"),tail,1))
 				uni.ref.names = sort( unique(ref.names) )
 				# clr.ref = rainbow( length(uni.ref.names) )
-				clr.ref = brewer.pal( max(3,length(uni.ref.names)) , "Set3" )
+				clr.ref = rep(panel_colors, length.out=max(3,length(uni.ref.names)))
 				m = match( ref.names , uni.ref.names )
 				clr.leg = c( rep(NA,nrow(cur.glist)) , clr.ref[ m ] )
 				clr.num = c( rep("",nrow(cur.glist)) , m )
@@ -533,7 +535,7 @@ for ( i in 1:length(cons.loc.starts) ) {
 				ref.names = unlist(lapply(strsplit(dirname(wgtlist$FILE[ joint.keep & ge.keep ]),"/"),tail,1))
 				uni.ref.names = sort( unique(ref.names) )
 				#clr.ref = rainbow( length(uni.ref.names) )
-				clr.ref = brewer.pal( max(3,length(uni.ref.names)) , "Set3" )
+				clr.ref = rep(panel_colors, length.out=max(3,length(uni.ref.names)))
 
 				m = match( ref.names , uni.ref.names )
 				clr.leg = rep(NA , sum(ge.keep))

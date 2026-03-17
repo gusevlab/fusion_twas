@@ -1,10 +1,7 @@
-# ==== TODO
-# * Make sure BLUP/BSLMM weights are being scaled properly based on MAF
-
+suppressMessages(library("here"))
 suppressMessages(library("optparse"))
-suppressMessages(library('plink2R'))
 suppressMessages(library('glmnet'))
-suppressMessages(library('methods'))
+source(here("utils","plink_utils.R"))
 
 option_list = list(
   make_option("--bfile", action="store", default=NA, type='character',
@@ -120,6 +117,14 @@ weights.enet = function( genos , pheno , alpha=0.5 ) {
 	return( eff.wgt )
 }
 
+rank_normalize = function(x) {
+	keep = !is.na(x)
+	if (sum(keep) == 0) return(x)
+	r = rank(x[keep], ties.method="average")
+	x[keep] = qnorm((r - 0.5) / sum(keep))
+	return(x)
+}
+
 # --- CLEANUP
 cleanup = function() {
 	if ( ! opt$noclean ) {
@@ -147,7 +152,7 @@ if ( system( paste(opt$PATH_plink,"--help") , ignore.stdout=T,ignore.stderr=T ) 
 	q()
 }
 
-if ( !is.na(opt$hsq_set) && system( opt$PATH_gcta , ignore.stdout=T,ignore.stderr=T ) != 0 ){
+if ( is.na(opt$hsq_set) && system( opt$PATH_gcta , ignore.stdout=T,ignore.stderr=T ) != 0 ){
 	cat( "ERROR: gcta could not be executed, set with --PATH_gcta\n" , sep='', file=stderr() )
 	cleanup()
 	q()
@@ -179,9 +184,7 @@ if ( !is.na(opt$pheno) ) {
 }
 
 if ( opt$rn ) {
-	library('GenABEL')
-	library(preprocessCore)
-	pheno[,3] = rntransform( pheno[,3] )
+	pheno[,3] = rank_normalize( pheno[,3] )
 	write.table(pheno,quote=F,row.names=F,col.names=F,file=pheno.file)
 }
 
@@ -271,9 +274,10 @@ if ( sum(nasnps) != 0 ) {
 # regress covariates out of the genotypes as well (this is more accurate but slower)
 if ( !is.na(opt$covar) && opt$resid ) {
 	if ( opt$verbose >= 1 ) cat("regressing covariates out of the genotypes\n")
-	for ( i in 1:ncol(genos$bed) ) {
-		genos$bed[,i] = summary(lm( genos$bed[,i] ~ as.matrix(covar[,3:ncol(covar)]) ))$resid
-	}
+	X = cbind(1, as.matrix(covar[,3:ncol(covar),drop=F]))
+	XtX_inv = solve(crossprod(X))
+	proj = X %*% XtX_inv
+	genos$bed = genos$bed - proj %*% crossprod(X, genos$bed)
 	genos$bed = scale(genos$bed)
 }
 

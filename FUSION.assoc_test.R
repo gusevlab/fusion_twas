@@ -1,5 +1,6 @@
-suppressMessages(library('plink2R'))
+suppressMessages(library("here"))
 suppressMessages(library("optparse"))
+source(here("utils","plink_utils.R"))
 
 option_list = list(
   make_option("--sumstats", action="store", default=NA, type='character',
@@ -16,8 +17,6 @@ option_list = list(
               help="Force specific predictive model to be used, no flag (default) means select most significant cross-val. Options: blup,lasso,top1,enet"),
   make_option("--caviar", action="store_true", default=FALSE,
               help="Generate eCAVIAR-format (Z,LD) files for fine-mapping [default off]"),
-  make_option("--jlim", action="store_true", default=FALSE,
-              help="NOT IMPLEMENTED: Compute JLIM statistic [Chun et al Nat Genet 2017].\nRequires jlimR library installed. [default: %default]"),			  
   make_option("--max_impute", action="store", default=0.5 , type='double',
               help="Maximum fraction of SNPs allowed to be missing per gene (will be imputed using LD). [default: %default]"),			  
   make_option("--min_r2pred", action="store", default=0.7 , type='double',
@@ -30,6 +29,8 @@ option_list = list(
               help="Chromosome to analyze, currently only single chromosome analyses are performed [required]"),
   make_option("--coloc_P", action="store", default=NA, type='double',
               help="P-value below which to compute COLOC statistic [Giambartolomei et al PLoS Genet 2013]\nRequires coloc library installed and --GWASN flag. [default NA/off]"),
+  make_option("--coloc_susie_P", action="store", default=NA, type='double',
+              help="P-value below which to compute coloc.susie statistic [Wallace PLoS Genet 2021]\nRequires coloc library installed and --GWASN flag. [default NA/off]"),
   make_option("--GWASN", action="store", default=NA, type='integer',
               help="Total GWAS/sumstats sample size for inference of standard GWAS effect size."),
   make_option("--PANELN", action="store", default=NA, type='character',
@@ -69,8 +70,19 @@ allele.qc = function(a1,a2,ref1,ref2) {
 	return(snp)
 }
 
+rbind_fill = function(tbls) {
+	cols = unique(unlist(lapply(tbls, names)))
+	tbls = lapply(tbls, function(df) {
+		miss = setdiff(cols, names(df))
+		for ( nm in miss ) df[[nm]] = NA
+		df[, cols, drop=FALSE]
+	})
+	do.call(rbind, tbls)
+}
+
 # Load in summary stats
 sumstat = read.table(opt$sumstats,head=T,as.is=T)
+has_gwas_beta_se = all(c("BETA","SE") %in% colnames(sumstat))
 
 # Load in list of weights
 # TODO : TEST FOR NO HEADER HERE
@@ -81,19 +93,22 @@ chr = unique(wgtlist$CHR)
 N = nrow(wgtlist)
 out.tbl = data.frame( "PANEL" = rep(NA,N) , "FILE" = character(N) , "ID" = character(N) , "CHR" = numeric(N) , "P0" = character(N) , "P1" = character(N) ,"HSQ" = numeric(N) , "BEST.GWAS.ID" = character(N) , "BEST.GWAS.Z" = numeric(N) , "EQTL.ID" = character(N) , "EQTL.R2" = numeric(N) , "EQTL.Z" = numeric(N) , "EQTL.GWAS.Z" = numeric(N) , "NSNP" = numeric(N) , "NWGT" = numeric(N) , "MODEL" = character(N) , "MODELCV.R2" = character(N) , "MODELCV.PV" = character(N) , "TWAS.Z" = numeric(N) , "TWAS.P" = numeric(N) , stringsAsFactors=FALSE )
 
-if ( opt$jlim ) {
-	suppressMessages(library('jlimR'))
-	jlim.r2res = 0.8
-	jlim.thresholdingP = 0.1
-	out.tbl$JLIM.P = numeric(N)
-	out.tbl$JLIM.STAT = numeric(N)
+if ( !is.na(opt$coloc_P) || !is.na(opt$coloc_susie_P) ) {
+	if ( !requireNamespace("coloc", quietly=TRUE) ) {
+		cat("ERROR : coloc package required for COLOC or coloc.susie analysis\n")
+		q()
+	}
+	if ( !is.na(opt$coloc_susie_P) && (is.na(opt$GWASN) || opt$GWASN < 1) ) {
+		cat("ERROR : --GWASN flag required to be positive integer for coloc.susie analysis\n")
+		q()
+	}
+	if ( is.na(opt$coloc_susie_P) && !has_gwas_beta_se && (is.na(opt$GWASN) || opt$GWASN < 1) ) {
+		cat("ERROR : GWAS BETA/SE columns or --GWASN flag required for COLOC analysis\n")
+		q()
+	}
 }
 
 if ( !is.na(opt$coloc_P) ) {
-	if ( is.na(opt$GWASN) || opt$GWASN < 1 ) {
-		cat("ERROR : --GWASN flag required to be positive integer for COLOC analysis\n")
-		q()
-	}
 	if ( sum(names(wgtlist) == "N") == 0 ) {
 		if ( sum(names(wgtlist) == "PANEL") == 0 || is.na(opt$PANELN) ) {
 			cat("ERROR : 'N' field needed in weights file or 'PANEL' column and --PANELN flag required for COLOC analysis\n")
@@ -104,12 +119,23 @@ if ( !is.na(opt$coloc_P) ) {
 			wgtlist$N = paneln$N[ m ]
 		}
 	}
-	suppressMessages(library('coloc'))
 	out.tbl$COLOC.PP0 = as.numeric(rep(NA,N))
 	out.tbl$COLOC.PP1 = as.numeric(rep(NA,N))
 	out.tbl$COLOC.PP2 = as.numeric(rep(NA,N))
 	out.tbl$COLOC.PP3 = as.numeric(rep(NA,N))
 	out.tbl$COLOC.PP4 = as.numeric(rep(NA,N))
+}
+
+if ( !is.na(opt$coloc_susie_P) ) {
+	out.tbl$COLOC.SUSIE.HIT1 = character(N)
+	out.tbl$COLOC.SUSIE.HIT2 = character(N)
+	out.tbl$COLOC.SUSIE.PP0 = character(N)
+	out.tbl$COLOC.SUSIE.PP1 = character(N)
+	out.tbl$COLOC.SUSIE.PP2 = character(N)
+	out.tbl$COLOC.SUSIE.PP3 = character(N)
+	out.tbl$COLOC.SUSIE.PP4 = character(N)
+	coloc.susie.summary = vector("list", N)
+	coloc.susie.results = vector("list", N)
 }
 
 if ( !is.na(opt$perm) && opt$perm > 0 ) {
@@ -135,6 +161,7 @@ qc = allele.qc( sumstat$A1 , sumstat$A2 , genos$bim[,5] , genos$bim[,6] )
 
 # Flip Z-scores for mismatching alleles
 sumstat$Z[ qc$flip ] = -1 * sumstat$Z[ qc$flip ]
+if ( "BETA" %in% colnames(sumstat) ) sumstat$BETA[ qc$flip ] = -1 * sumstat$BETA[ qc$flip ]
 sumstat$A1[ qc$flip ] = genos$bim[qc$flip,5]
 sumstat$A2[ qc$flip ] = genos$bim[qc$flip,6]
 
@@ -181,13 +208,13 @@ for ( w in 1:nrow(wgtlist) ) {
 	row.pval = grep( "pval" , rownames(cv.performance) )	
 	
 	# Identify the best model
-	if ( !is.na(opt$force_model) ) {
-		mod.best = which( colnames(wgt.matrix) == opt$force_model )
-		if ( length(mod.best) == 0 ) {
-			cat( "WARNING : --force_model" , mod.best ,"does not exist for", unlist(wgtlist[w,]) , "\n")
-			cur.FAIL = TRUE
-		}	
-	} else {
+		if ( !is.na(opt$force_model) ) {
+			mod.best = which( colnames(wgt.matrix) == opt$force_model )
+			if ( length(mod.best) == 0 ) {
+				cat( "WARNING : --force_model" , opt$force_model ,"does not exist for", unlist(wgtlist[w,]) , "\n")
+				cur.FAIL = TRUE
+			}	
+		} else {
 		# get the most significant model
 		mod.best = which.min(apply(cv.performance[row.pval,,drop=F],2,min,na.rm=T))
 	}
@@ -313,25 +340,15 @@ for ( w in 1:nrow(wgtlist) ) {
 		out.tbl$EQTL.GWAS.Z[w] = cur.Z[ topeqtl ]
 		
 		# write CAVIAR inputs
-		if( opt$caviar ) {
-			cur.Z = as.matrix(cur.Z,ncol=1)
-			rownames(cur.Z) = snps[,2]
-			cav.out = paste( opt$out , wgtlist$ID[w] , "CAVIAR" , sep='.' )
-			write.table( format(cur.LD,digits=3) , quote=F , col.names=F , row.names=F , file = paste( cav.out , ".LD" , sep='' ) )
-			write.table( format(wgt.matrix[,eqtlmod],digits=3) , quote=F , col.names=F , sep='\t' , file = paste( cav.out , ".EQTL.Z" , sep='') )
-			write.table( format(cur.Z,digits=3) , quote=F , col.names=F , sep='\t' , file = paste( cav.out , ".GWAS.Z" , sep='') )
+			if( opt$caviar ) {
+				cur.Z = as.matrix(cur.Z,ncol=1)
+				rownames(cur.Z) = snps[,2]
+				cav.out = paste( opt$out , wgtlist$ID[w] , "CAVIAR" , sep='.' )
+				write.table( format(cur.LD,digits=3) , quote=F , col.names=F , row.names=F , file = paste( cav.out , ".LD" , sep='' ) )
+				write.table( format(wgt.matrix[,eqtlmod],digits=3) , quote=F , col.names=F , sep='\t' , file = paste( cav.out , ".EQTL.Z" , sep='') )
+				write.table( format(cur.Z,digits=3) , quote=F , col.names=F , sep='\t' , file = paste( cav.out , ".GWAS.Z" , sep='') )
+			}
 		}
-		
-		# perform JLIM test
-		if ( opt$jlim ) {
-			jlim.lambda.t = jlimR:::calc.stat( cur.Z , wgt.matrix[,eqtlmod] , cur.LD , cur.LD , jlim.r2res )
-			# TODO : Sample permuted eQTL Z-scores from the MvN using LD matrix
-			jlim.nulldist = jlimR:::perm.test( cur.Z , wgt.matrix[,eqtlmod], permmat, cur.LD, cur.LD, jlim.thresholdingP, jlim.r2res, jlim.lambda.t)
-			permP = sum(jlim.nulldist >= jlim.lambda.t, na.rm = TRUE)/sum(!is.na(NULLDIST))
-			out.tbl$JLIM.STAT[w] = jlim.lambda.t
-			out.tbl$JLIM.P[w] = permP		
-		}
-	}
 	
 	topgwas = which.max( cur.Z^2 )
 	if ( !cur.FAIL && length(topgwas) != 0 && !is.na(topgwas) ) {
@@ -351,23 +368,95 @@ for ( w in 1:nrow(wgtlist) ) {
 		out.tbl$TWAS.P[w] = NA
 	}
 
-	# perform COLOC test
-	if ( !is.na(opt$coloc_P) && !is.na(out.tbl$TWAS.Z[w]) && out.tbl$TWAS.P[w] < opt$coloc_P && !is.na(wgtlist$N[w]) ) {
-		b1 = wgt.matrix[,eqtlmod] / sqrt(wgtlist$N[w])
-		b2 = cur.Z / sqrt(opt$GWASN)
+		# Run COLOC (either mode)
+		if ( !is.na(out.tbl$TWAS.P[w]) && ((!is.na(opt$coloc_P) && out.tbl$TWAS.P[w] < opt$coloc_P) || (!is.na(opt$coloc_susie_P) && out.tbl$TWAS.P[w] < opt$coloc_susie_P)) ) {
+			# Compute eQTL sample size needed for COLOC			
+			if ( !is.na(wgtlist$N[w]) ) {
+				eqtl.N = wgtlist$N[w]
+			} else if ( exists("N.tot") ) {
+				eqtl.N = N.tot
+			} else {
+				eqtl.N = NA
+			}
+			
+			if ( is.na(eqtl.N) || eqtl.N < 1 ) {
+				cat( "WARNING : " , unlist(wgtlist[w,]) , "missing N.tot in weight file, skipping coloc.susie.\n")
+			} else {
+				# Compute eQTL weights needed for COLOC
+				eqtl.z = as.numeric(wgt.matrix[,eqtlmod])
+				eqtl.beta = eqtl.z / sqrt(eqtl.N)
+				eqtl.varbeta = rep(1/eqtl.N,length(eqtl.beta))
+				d1 = list(beta=eqtl.beta,varbeta=eqtl.varbeta,LD=cur.LD,snp=cur.bim[,2],position=cur.bim[,4],N=eqtl.N,type="quant",sdY=1)
+								
+				# Use the beta and se from the GWAS data if available
+				if ( has_gwas_beta_se ) {
+					gwas.beta = sumstat$BETA[m]
+					gwas.varbeta = sumstat$SE[m]^2
+					d2 = list(beta=gwas.beta,varbeta=gwas.varbeta,LD=cur.LD,snp=cur.bim[,2],position=cur.bim[,4],type="quant",sdY=1)
 
-		vb1 = rep(1/wgtlist$N[w],length(b1))
-		vb2 = rep(1/opt$GWASN,length(b2))
-
-		err = suppressMessages(capture.output(clc <- coloc.abf(dataset1=list(beta=b1,varbeta=vb1,type="quant",N=wgtlist$N[w],sdY=1),dataset2=list(beta=b2,varbeta=vb2,type="quant",N=opt$GWASN,sdY=1))))
-		out.tbl$COLOC.PP0[w] = round(clc$summary[2],3)
-		out.tbl$COLOC.PP1[w] = round(clc$summary[3],3)
-		out.tbl$COLOC.PP2[w] = round(clc$summary[4],3)
-		out.tbl$COLOC.PP3[w] = round(clc$summary[5],3)
-		out.tbl$COLOC.PP4[w] = round(clc$summary[6],3)
+				} else {
+					gwas.beta = cur.Z / sqrt(opt$GWASN)
+					gwas.varbeta = rep(1/opt$GWASN,length(gwas.beta))
+					d2 = list(beta=gwas.beta,varbeta=gwas.varbeta,LD=cur.LD,snp=cur.bim[,2],position=cur.bim[,4],N=opt$GWASN,type="quant",sdY=1)
+				}
+				
+				if ( !is.na(opt$coloc_P) ) {
+					clc = tryCatch({
+						err = suppressWarnings(suppressMessages(capture.output(out <- coloc::coloc.abf(dataset1=d1,dataset2=d2))))
+						out
+					}, error = function(e) {
+						return(NULL)
+					})
+					if ( !is.null(clc) ) {
+						out.tbl$COLOC.PP0[w] = round(clc$summary[2],3)
+						out.tbl$COLOC.PP1[w] = round(clc$summary[3],3)
+						out.tbl$COLOC.PP2[w] = round(clc$summary[4],3)
+						out.tbl$COLOC.PP3[w] = round(clc$summary[5],3)
+						out.tbl$COLOC.PP4[w] = round(clc$summary[6],3)	
+					}			
+				}
+				
+				if ( !is.na(opt$coloc_susie_P) ) {
+					clc.susie = tryCatch({
+						err = suppressWarnings(suppressMessages(capture.output(out <- coloc::coloc.susie(d1,d2))))
+						out
+					}, error = function(e) {
+						return(NULL)
+					})
+						
+					if ( !is.null(clc.susie) ) {
+						cs = as.data.frame(clc.susie$summary)
+						rs = as.data.frame(clc.susie$results)
+						if ( nrow(cs) > 0 ) {
+							cs$FILE = wgt.file
+							cs$ID = wgtlist$ID[w]
+							cs$CHR = wgtlist$CHR[w]
+							cs$P0 = wgtlist$P0[w]
+							cs$P1 = wgtlist$P1[w]
+							coloc.susie.summary[[w]] = cs
+							out.tbl$COLOC.SUSIE.HIT1[w] = paste(cs$hit1,collapse=",")
+							out.tbl$COLOC.SUSIE.HIT2[w] = paste(cs$hit2,collapse=",")
+							out.tbl$COLOC.SUSIE.PP0[w] = paste(format(cs$PP.H0.abf,digits=3,trim=TRUE),collapse=",")
+							out.tbl$COLOC.SUSIE.PP1[w] = paste(format(cs$PP.H1.abf,digits=3,trim=TRUE),collapse=",")
+							out.tbl$COLOC.SUSIE.PP2[w] = paste(format(cs$PP.H2.abf,digits=3,trim=TRUE),collapse=",")
+							out.tbl$COLOC.SUSIE.PP3[w] = paste(format(cs$PP.H3.abf,digits=3,trim=TRUE),collapse=",")
+							out.tbl$COLOC.SUSIE.PP4[w] = paste(format(cs$PP.H4.abf,digits=3,trim=TRUE),collapse=",")
+						}
+						if ( nrow(rs) > 0 ) {
+							rs$FILE = wgt.file
+							rs$ID = wgtlist$ID[w]
+							rs$CHR = wgtlist$CHR[w]
+							rs$P0 = wgtlist$P0[w]
+							rs$P1 = wgtlist$P1[w]
+							coloc.susie.results[[w]] = rs
+						}
+					}
+				}
+			}	
+		}
+	
+		if ( cur.FAIL ) FAIL.ctr = FAIL.ctr + 1
 	}
-	if ( cur.FAIL ) FAIL.ctr = FAIL.ctr + 1
-}
 
 cat("Analysis completed.\n")
 cat("NOTE:",FAIL.ctr,"/",nrow(wgtlist),"genes were skipped\n")
@@ -389,3 +478,14 @@ if ( sum( mhc ) > 0 ) {
 	write.table( format( out.tbl[mhc,] , digits=3 ) , quote=F , row.names=F , sep='\t' , file=paste(opt$out,".MHC",sep='') )
 }
 write.table( format( out.tbl[!mhc,] , digits=3 ) , quote=F , row.names=F , sep='\t' , file=opt$out )
+
+if ( !is.na(opt$coloc_susie_P) ) {
+	coloc.susie.summary = Filter(Negate(is.null), coloc.susie.summary)
+	if ( length(coloc.susie.summary) > 0 ) {
+		write.table( rbind_fill(coloc.susie.summary) , quote=F , row.names=F , sep='\t' , file=paste(opt$out,".coloc.susie.summary",sep='') )
+	}
+	coloc.susie.results = Filter(Negate(is.null), coloc.susie.results)
+	if ( length(coloc.susie.results) > 0 ) {
+		write.table( rbind_fill(coloc.susie.results) , quote=F , row.names=F , sep='\t' , file=paste(opt$out,".coloc.susie.results",sep='') )
+	}
+}

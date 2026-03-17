@@ -4,9 +4,12 @@
 # 	Rscript pairs.R --pos1 TCGA-BRCA.GE.TUMOR.pos --pos2 TCGA-BRCA.GE.NORMAL.pos --chr 1 --ref_ld_chr ../../LDREF/1000G.EUR. --window 100000
 # ---
 
-suppressMessages(library('plink2R'))
+local({
+  f = grep("--file=", commandArgs(FALSE), value = TRUE)
+  d = if (length(f)) { me = normalizePath(sub("--file=","",f[1])); dd = dirname(me); if (basename(dd) %in% c("utils","simulate")) dirname(dd) else dd } else getwd()
+  source(file.path(d, "utils", "plink_utils.R"))
+})
 suppressMessages(library("optparse"))
-suppressMessages(library("RColorBrewer"))
 
 allele.qc = function(a1,a2,ref1,ref2) {
 	a1 = toupper(a1)
@@ -74,7 +77,7 @@ pos2 = pos2[ pos2$CHR == chr , ]
 
 # load in genotype files by chromosome, restrict to matching SNPs and combine
 genos = read_plink(paste(opt$ref_ld_chr,chr,sep=''),impute="avg")
-MAFS = apply(genos$bed,2,mean)
+MAFS = apply(genos$bed,2,mean) / 2
 genos$bed = scale(genos$bed)
 N = nrow(genos$fam)
 
